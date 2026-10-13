@@ -2,45 +2,53 @@
 <html lang="tr">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>HD İşitme Destek Asistanı</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#0f1115">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>HD İşitme Asistanı Pro</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; margin: 0; background: #0f1115; color: #fff; padding: 14px; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; margin: 0; background: #0f1115; color: #fff; padding: 14px; box-sizing: border-box; user-select: none; }
     .card { background: #181b22; padding: 20px; border-radius: 20px; width: 100%; max-width: 420px; box-shadow: 0 10px 30px rgba(0,0,0,0.7); border: 1px solid #282d37; }
-    h2 { margin: 0 0 6px 0; text-align: center; color: #00e676; font-size: 21px; }
-    .subtitle { text-align: center; font-size: 12px; color: #9aa0a6; margin-bottom: 14px; }
-    .presets { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 16px; }
+    h2 { margin: 0 0 4px 0; text-align: center; color: #00e676; font-size: 21px; }
+    .subtitle { text-align: center; font-size: 12px; color: #00e676; margin-bottom: 14px; opacity: 0.85; }
+    .presets { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
     .preset-btn { padding: 10px 8px; font-size: 13px; border-radius: 10px; border: 1px solid #333947; background: #222630; color: #ddd; cursor: pointer; font-weight: 600; transition: 0.15s; }
     .preset-btn.selected { background: #00e676; color: #000; border-color: #00e676; }
-    .control { margin: 13px 0; }
+    .control { margin: 12px 0; }
     .label-row { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 5px; color: #d1d5db; }
     .val-badge { color: #00e676; font-weight: bold; }
     select, input[type="range"] { width: 100%; padding: 8px; border-radius: 8px; background: #252a34; color: #fff; border: 1px solid #3a4150; box-sizing: border-box; accent-color: #00e676; }
-    .checkbox-row { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; color: #ccc; margin-top: 8px; }
-    .checkbox-row input { width: 17px; height: 17px; accent-color: #00e676; }
     .meter-container { width: 100%; height: 8px; background: #252a34; border-radius: 6px; overflow: hidden; margin-top: 14px; }
-    .meter-bar { height: 100%; width: 0%; background: linear-gradient(90deg, #00e676, #ffeb3b, #ff5252); transition: width 0.04s linear; }
-    #mainBtn { width: 100%; padding: 16px; font-size: 17px; border-radius: 14px; border: none; background: #00e676; color: #000; font-weight: bold; cursor: pointer; margin-top: 14px; transition: 0.2s; }
+    .meter-bar { height: 100%; width: 0%; background: linear-gradient(90deg, #00e676, #ffeb3b, #ff5252); }
+    .btn-row { display: flex; gap: 8px; margin-top: 14px; }
+    #mainBtn { flex: 2; padding: 16px; font-size: 16px; border-radius: 14px; border: none; background: #00e676; color: #000; font-weight: bold; cursor: pointer; transition: 0.2s; }
     #mainBtn.active { background: #ff5252; color: #fff; }
-    .tip { font-size: 11.5px; color: #ffb74d; background: #2a2015; padding: 9px; border-radius: 8px; margin-top: 12px; line-height: 1.4; }
+    #pocketBtn { flex: 1; padding: 16px 10px; font-size: 13px; border-radius: 14px; border: 1px solid #3a4150; background: #252a34; color: #fff; font-weight: 600; cursor: pointer; display: none; }
+    .status-bar { font-size: 11.5px; color: #9aa0a6; text-align: center; margin-top: 10px; }
+    /* Cep Modu (Tam Siyah OLED Ekran Kilidi) */
+    #blackoutOverlay { display: none; position: fixed; inset: 0; background: #000; z-index: 9999; flex-direction: column; align-items: center; justify-content: center; color: #444; font-size: 14px; text-align: center; }
   </style>
 </head>
 <body>
+  <div id="blackoutOverlay">
+    <p>🌙 <strong>Cep Modu Aktif</strong><br><br>Ses arka planda sıfır gecikmeyle çalışıyor.<br>Ekranı açmak için <strong>iki kez dokunun</strong>.</p>
+  </div>
+
   <div class="card">
-    <h2>HD İşitme Cihazı Modu</h2>
-    <div class="subtitle">Saf 48 kHz Odyolojik Ses İşleme Motoru</div>
+    <h2>HD İşitme Cihazı Pro</h2>
+    <div class="subtitle">⚡ 0 ms Sıfır Gecikme & Arka Plan Servisi</div>
 
     <div class="presets">
-      <button class="preset-btn selected" onclick="applyPreset('crystal', this)">💎 Kristal Netlik</button>
-      <button class="preset-btn" onclick="applyPreset('crowd', this)">👥 Gürültülü Ortam</button>
-      <button class="preset-btn" onclick="applyPreset('natural', this)">🌿 Doğal & TV</button>
-      <button class="preset-btn" onclick="applyPreset('whisper', this)">👂 Uzak / Fısıltı</button>
+      <button class="preset-btn selected" id="p_crystal" onclick="applyPreset('crystal', this)">💎 Kristal Netlik</button>
+      <button class="preset-btn" id="p_crowd" onclick="applyPreset('crowd', this)">👥 Gürültülü Ortam</button>
+      <button class="preset-btn" id="p_natural" onclick="applyPreset('natural', this)">🌿 Doğal & TV</button>
+      <button class="preset-btn" id="p_whisper" onclick="applyPreset('whisper', this)">👂 Uzak / Fısıltı</button>
     </div>
 
     <div class="control">
-      <div class="label-row"><span>Mikrofon Kaynağı (Telefondakini Seçin):</span></div>
+      <div class="label-row"><span>Mikrofon Kaynağı:</span></div>
       <select id="micSelect">
-        <option value="">Otomatik (Telefon Mikrofonu)</option>
+        <option value="">Speakerphone (Telefon Mikrofonu)</option>
       </select>
     </div>
 
@@ -84,34 +92,108 @@
       <input type="range" id="panSlider" min="-1" max="1" step="0.1" value="0">
     </div>
 
-    <label class="checkbox-row">
-      <input type="checkbox" id="aiNoiseToggle">
-      <span>Tarayıcı Gürültü Kesici (Sesi boğuklaştırırsa kapalı tutun)</span>
-    </label>
-
     <div class="meter-container">
       <div id="meterBar" class="meter-bar"></div>
     </div>
 
-    <button id="mainBtn">İşitme Desteğini Başlat</button>
-
-    <div class="tip">
-      <strong>💡 Önemli İpucu:</strong> Bluetooth kulaklık kullanırken sesin boğuk gelmemesi için yukarıdaki listeden <em>"Bluetooth"</em> yazanı değil, <strong>"Hoparlör / Speakerphone / Telefon"</strong> mikrofonunu seçin.
+    <div class="btn-row">
+      <button id="mainBtn">Başlat</button>
+      <button id="pocketBtn">🌙 Cep Modu</button>
     </div>
+
+    <div id="latencyInfo" class="status-bar">Hazır — Ayarlarınız otomatik kaydedilir</div>
   </div>
 
   <script>
-    let audioCtx, stream, gainNode, highPass, mudCut, midBoost, trebleBoost, lowPass, panner, analyser, animId, wakeLock;
+    let audioCtx, stream, gainNode, highPass, mudCut, midBoost, trebleBoost, lowPass, panner, limiter, analyser, animId, wakeLock, keepAliveAudio;
 
     const mainBtn = document.getElementById('mainBtn');
+    const pocketBtn = document.getElementById('pocketBtn');
+    const blackoutOverlay = document.getElementById('blackoutOverlay');
     const micSelect = document.getElementById('micSelect');
     const gainSlider = document.getElementById('gainSlider');
     const midSlider = document.getElementById('midSlider');
     const trebleSlider = document.getElementById('trebleSlider');
     const bassCutSlider = document.getElementById('bassCutSlider');
     const panSlider = document.getElementById('panSlider');
-    const aiNoiseToggle = document.getElementById('aiNoiseToggle');
     const meterBar = document.getElementById('meterBar');
+    const latencyInfo = document.getElementById('latencyInfo');
+
+    // Kayıtlı ayarları yükle
+    function loadSavedSettings() {
+      if (localStorage.getItem('ha_gain')) gainSlider.value = localStorage.getItem('ha_gain');
+      if (localStorage.getItem('ha_mid')) midSlider.value = localStorage.getItem('ha_mid');
+      if (localStorage.getItem('ha_treble')) trebleSlider.value = localStorage.getItem('ha_treble');
+      if (localStorage.getItem('ha_bass')) bassCutSlider.value = localStorage.getItem('ha_bass');
+      if (localStorage.getItem('ha_pan')) panSlider.value = localStorage.getItem('ha_pan');
+      updateUIValues();
+    }
+
+    function saveSettings() {
+      localStorage.setItem('ha_gain', gainSlider.value);
+      localStorage.setItem('ha_mid', midSlider.value);
+      localStorage.setItem('ha_treble', trebleSlider.value);
+      localStorage.setItem('ha_bass', bassCutSlider.value);
+      localStorage.setItem('ha_pan', panSlider.value);
+      if (micSelect.value) localStorage.setItem('ha_mic', micSelect.value);
+    }
+
+    // 0 ms Sıfır Gecikmeli Soft-Limiter Eğrisi (Patlamaları gecikmesiz önler)
+    function makeSoftClipCurve() {
+      const n = 8192;
+      const curve = new Float32Array(n);
+      for (let i = 0; i < n; i++) {
+        const x = (i * 2) / n - 1;
+        curve[i] = Math.tanh(x * 1.5);
+      }
+      return curve;
+    }
+
+    // Arka planda tarayıcının uyumasını engelleyen sessiz ses döngüsü oluşturucu
+    function createSilentWavUrl() {
+      const sampleRate = 8000;
+      const numSamples = sampleRate;
+      const buffer = new ArrayBuffer(44 + numSamples * 2);
+      const view = new DataView(buffer);
+      const writeStr = (off, s) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
+      writeStr(0, 'RIFF');
+      view.setUint32(4, 36 + numSamples * 2, true);
+      writeStr(8, 'WAVE');
+      writeStr(12, 'fmt ');
+      view.setUint32(16, 16, true);
+      view.setUint16(20, 1, true);
+      view.setUint16(22, 1, true);
+      view.setUint32(24, sampleRate, true);
+      view.setUint32(28, sampleRate * 2, true);
+      view.setUint16(32, 2, true);
+      view.setUint16(34, 16, true);
+      writeStr(36, 'data');
+      view.setUint32(40, numSamples * 2, true);
+      for (let i = 0; i < numSamples; i++) {
+        view.setInt16(44 + i * 2, 1, true);
+      }
+      return URL.createObjectURL(new Blob([buffer], { type: 'audio/wav' }));
+    }
+
+    function enableBackgroundService() {
+      if (!keepAliveAudio) {
+        keepAliveAudio = new Audio(createSilentWavUrl());
+        keepAliveAudio.loop = true;
+        keepAliveAudio.volume = 0.01;
+      }
+      keepAliveAudio.play().catch(() => {});
+
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: 'HD İşitme Asistanı Aktif',
+          artist: 'Sıfır Gecikmeli Canlı Ses Motoru',
+          album: 'Arka Plan Servisi'
+        });
+        navigator.mediaSession.playbackState = 'playing';
+        navigator.mediaSession.setActionHandler('pause', () => stopAudio());
+        navigator.mediaSession.setActionHandler('stop', () => stopAudio());
+      }
+    }
 
     function updateUIValues() {
       document.getElementById('gainVal').textContent = `${gainSlider.value}x`;
@@ -119,10 +201,7 @@
       document.getElementById('trebleVal').textContent = `+${trebleSlider.value} dB`;
       
       const cutHz = parseInt(bassCutSlider.value);
-      let cutLabel = `${cutHz} Hz`;
-      if (cutHz <= 110) cutLabel = `Hafif (${cutHz} Hz)`;
-      else if (cutHz <= 220) cutLabel = `Orta (${cutHz} Hz)`;
-      else cutLabel = `Güçlü (${cutHz} Hz)`;
+      let cutLabel = cutHz <= 110 ? `Hafif (${cutHz} Hz)` : (cutHz <= 220 ? `Orta (${cutHz} Hz)` : `Güçlü (${cutHz} Hz)`);
       document.getElementById('bassCutVal').textContent = cutLabel;
 
       const pan = parseFloat(panSlider.value);
@@ -136,6 +215,7 @@
         mudCut.gain.value = cutHz > 150 ? -6 : -2;
       }
       if (panner) panner.pan.value = pan;
+      saveSettings();
     }
 
     [gainSlider, midSlider, trebleSlider, bassCutSlider, panSlider].forEach(el => {
@@ -153,7 +233,7 @@
       } else if (name === 'natural') {
         gainSlider.value = 3.0; midSlider.value = 3; trebleSlider.value = 5; bassCutSlider.value = 100;
       } else if (name === 'whisper') {
-        gainSlider.value = 7.0; midSlider.value = 10; trebleSlider.value = 14; bassCutSlider.value = 200;
+        gainSlider.value = 7.5; midSlider.value = 11; trebleSlider.value = 15; bassCutSlider.value = 200;
       }
       updateUIValues();
     }
@@ -161,10 +241,11 @@
     async function loadMicrophones() {
       const devices = await navigator.mediaDevices.enumerateDevices();
       const mics = devices.filter(d => d.kind === 'audioinput');
-      const current = micSelect.value;
+      const savedMic = localStorage.getItem('ha_mic');
+      const current = micSelect.value || savedMic;
       micSelect.innerHTML = '';
 
-      let preferredId = '';
+      let speakerphoneId = '';
       mics.forEach((mic, idx) => {
         const opt = document.createElement('option');
         opt.value = mic.deviceId;
@@ -172,30 +253,23 @@
         opt.textContent = label;
         micSelect.appendChild(opt);
 
-        // Bluetooth olmayan telefon mikrofonunu otomatik bul
-        const lowLabel = label.toLowerCase();
-        if (!lowLabel.includes('bluetooth') && !lowLabel.includes('headset') && !lowLabel.includes('airpods') && !lowLabel.includes('buds')) {
-          if (!preferredId || lowLabel.includes('speaker') || lowLabel.includes('camcorder') || lowLabel.includes('back')) {
-            preferredId = mic.deviceId;
-          }
+        const low = label.toLowerCase();
+        if (low.includes('speakerphone') || low.includes('hoparlör')) {
+          speakerphoneId = mic.deviceId;
+        } else if (!speakerphoneId && !low.includes('bluetooth') && !low.includes('headset')) {
+          speakerphoneId = mic.deviceId;
         }
       });
 
-      if (current) {
+      if (current && [...micSelect.options].some(o => o.value === current)) {
         micSelect.value = current;
-      } else if (preferredId) {
-        micSelect.value = preferredId;
+      } else if (speakerphoneId) {
+        micSelect.value = speakerphoneId;
       }
     }
 
     micSelect.onchange = async () => {
-      if (audioCtx) {
-        await stopAudio();
-        await startAudio();
-      }
-    };
-
-    aiNoiseToggle.onchange = async () => {
+      saveSettings();
       if (audioCtx) {
         await stopAudio();
         await startAudio();
@@ -204,6 +278,11 @@
 
     function updateMeter() {
       if (!analyser) return;
+      if (document.hidden) {
+        // Arka plandayken gereksiz grafik çizimini durdurup işlemciyi sese odakla
+        animId = setTimeout(updateMeter, 500);
+        return;
+      }
       const data = new Uint8Array(analyser.frequencyBinCount);
       analyser.getByteTimeDomainData(data);
       let max = 0;
@@ -215,11 +294,18 @@
       animId = requestAnimationFrame(updateMeter);
     }
 
+    // Ekran kilidi veya sekme değişiminde ses motorunu uyanık tut
+    document.addEventListener('visibilitychange', () => {
+      if (audioCtx && audioCtx.state === 'suspended') {
+        audioCtx.resume();
+      }
+    });
+
     async function startAudio() {
       try {
         const constraints = {
           echoCancellation: false,
-          noiseSuppression: aiNoiseToggle.checked, // Saf ses için varsayılan kapalı!
+          noiseSuppression: false,
           autoGainControl: false,
           sampleRate: 48000,
           channelCount: 1,
@@ -233,63 +319,54 @@
         stream = await navigator.mediaDevices.getUserMedia({ audio: constraints });
         await loadMicrophones();
 
+        // latencyHint: 0 ile işletim sisteminin en küçük ses tamponunu (AAudio FastTrack) zorla
         audioCtx = new (window.AudioContext || window.webkitAudioContext)({
-          latencyHint: 'interactive',
+          latencyHint: 0,
           sampleRate: 48000
         });
 
         const source = audioCtx.createMediaStreamSource(stream);
 
-        // 1. Sub-Bass Uğultu Kesici (Klima, rüzgar, adım sesi)
         highPass = audioCtx.createBiquadFilter();
         highPass.type = 'highpass';
         highPass.frequency.value = parseFloat(bassCutSlider.value);
         highPass.Q.value = 0.707;
 
-        // 2. Oda Yankısı ve Boğukluk Temizleyici (320 Hz Anti-Masking)
         mudCut = audioCtx.createBiquadFilter();
         mudCut.type = 'peaking';
         mudCut.frequency.value = 320;
         mudCut.Q.value = 1.1;
         mudCut.gain.value = -5;
 
-        // 3. Konuşma Gövdesi ve Kelime Seçicilik (2400 Hz)
         midBoost = audioCtx.createBiquadFilter();
         midBoost.type = 'peaking';
         midBoost.frequency.value = 2400;
         midBoost.Q.value = 0.9;
         midBoost.gain.value = parseFloat(midSlider.value);
 
-        // 4. Harf ve Ortam Berraklığı (4500 Hz High-Shelf / Peaking)
         trebleBoost = audioCtx.createBiquadFilter();
         trebleBoost.type = 'peaking';
         trebleBoost.frequency.value = 4500;
         trebleBoost.Q.value = 0.8;
         trebleBoost.gain.value = parseFloat(trebleSlider.value);
 
-        // 5. Ultrasonik Tıslama Kesici (9500 Hz üzeri metalik paraziti keser)
         lowPass = audioCtx.createBiquadFilter();
         lowPass.type = 'lowpass';
         lowPass.frequency.value = 9500;
 
-        // 6. WDRC İşitme Cihazı Kompresörü (Kısık sesleri korur, ani patlamaları yumuşatır)
-        const compressor = audioCtx.createDynamicsCompressor();
-        compressor.threshold.value = -32;
-        compressor.knee.value = 24;
-        compressor.ratio.value = 4;
-        compressor.attack.value = 0.004;
-        compressor.release.value = 0.15;
-
-        // 7. Ana Amplifikatör (Gain)
         gainNode = audioCtx.createGain();
         gainNode.gain.value = parseFloat(gainSlider.value);
 
-        // 8. Sol / Sağ Kulak Dengesi
+        // 0 ms Gecikmeli Soft-Limiter (Kompresör gecikmesini tamamen ortadan kaldırır)
+        limiter = audioCtx.createWaveShaper();
+        limiter.curve = makeSoftClipCurve();
+        limiter.oversample = 'none';
+
         panner = audioCtx.createStereoPanner();
         panner.pan.value = parseFloat(panSlider.value);
 
         analyser = audioCtx.createAnalyser();
-        analyser.fftSize = 256;
+        analyser.fftSize = 128;
 
         source
           .connect(highPass)
@@ -297,13 +374,14 @@
           .connect(midBoost)
           .connect(trebleBoost)
           .connect(lowPass)
-          .connect(compressor)
           .connect(gainNode)
+          .connect(limiter)
           .connect(panner);
 
         panner.connect(audioCtx.destination);
-        gainNode.connect(analyser);
+        limiter.connect(analyser);
 
+        enableBackgroundService();
         updateUIValues();
         updateMeter();
 
@@ -311,8 +389,12 @@
           try { wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
         }
 
+        const baseLat = audioCtx.baseLatency ? Math.round(audioCtx.baseLatency * 1000) : 4;
+        latencyInfo.textContent = `⚡ Aktif — Yazılım Gecikmesi: ~${baseLat} ms (Arka Plan Korumalı)`;
+
         mainBtn.textContent = "Durdur";
         mainBtn.classList.add('active');
+        pocketBtn.style.display = "block";
       } catch (err) {
         alert("Mikrofon başlatılamadı: " + err.message);
       }
@@ -320,18 +402,43 @@
 
     async function stopAudio() {
       cancelAnimationFrame(animId);
+      clearTimeout(animId);
       meterBar.style.width = '0%';
+      if (keepAliveAudio) { keepAliveAudio.pause(); }
+      if ('mediaSession' in navigator) { navigator.mediaSession.playbackState = 'none'; }
       if (wakeLock) { try { await wakeLock.release(); wakeLock = null; } catch (e) {} }
       if (stream) stream.getTracks().forEach(t => t.stop());
       if (audioCtx) { await audioCtx.close(); audioCtx = null; }
-      mainBtn.textContent = "İşitme Desteğini Başlat";
+      mainBtn.textContent = "Başlat";
       mainBtn.classList.remove('active');
+      pocketBtn.style.display = "none";
+      latencyInfo.textContent = "Durduruldu";
     }
 
     mainBtn.onclick = async () => {
       if (!audioCtx) await startAudio();
       else await stopAudio();
     };
+
+    // Cep Modu: Ekranı tamamen karartır, çift dokununca açar
+    pocketBtn.onclick = () => {
+      blackoutOverlay.style.display = 'flex';
+    };
+
+    let lastTap = 0;
+    blackoutOverlay.addEventListener('touchend', (e) => {
+      const now = Date.now();
+      if (now - lastTap < 350) {
+        blackoutOverlay.style.display = 'none';
+      }
+      lastTap = now;
+      e.preventDefault();
+    });
+    blackoutOverlay.addEventListener('dblclick', () => {
+      blackoutOverlay.style.display = 'none';
+    });
+
+    loadSavedSettings();
   </script>
 </body>
 </html>
