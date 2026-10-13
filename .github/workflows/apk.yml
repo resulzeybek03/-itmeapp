@@ -1,0 +1,329 @@
+name: Android APK Uretici
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Depo Dosyalarini Cek
+        uses: actions/checkout@v4
+
+      - name: Java 17 Kur
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Android Projesini Olustur ve Derle
+        run: |
+          mkdir -p android-app
+          cd android-app
+          gradle wrapper --gradle-version 8.5
+
+          mkdir -p app/src/main/java/com/resul/isitme
+          mkdir -p app/src/main/assets
+          cp ../index.html app/src/main/assets/index.html
+
+          cat << 'EOF' > settings.gradle
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "IsitmeCihazi"
+          include ':app'
+          EOF
+
+          cat << 'EOF' > gradle.properties
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          EOF
+
+          cat << 'EOF' > build.gradle
+          plugins {
+              id 'com.android.application' version '8.2.2' apply false
+              id 'org.jetbrains.kotlin.android' version '1.9.22' apply false
+          }
+          EOF
+
+          cat << 'EOF' > app/build.gradle
+          plugins {
+              id 'com.android.application'
+              id 'org.jetbrains.kotlin.android'
+          }
+
+          android {
+              namespace 'com.resul.isitme'
+              compileSdk 34
+
+              defaultConfig {
+                  applicationId "com.resul.isitme"
+                  minSdk 26
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0"
+              }
+
+              buildTypes {
+                  debug {
+                      minifyEnabled false
+                  }
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+              kotlinOptions {
+                  jvmTarget = '17'
+              }
+          }
+
+          dependencies {
+              implementation 'androidx.core:core-ktx:1.12.0'
+              implementation 'androidx.appcompat:appcompat:1.6.1'
+              implementation 'androidx.webkit:webkit:1.10.0'
+          }
+          EOF
+
+          cat << 'EOF' > app/src/main/AndroidManifest.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.RECORD_AUDIO" />
+              <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+              <uses-permission android:name="android.permission.WAKE_LOCK" />
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+              <uses-permission android:name="android.permission.BLUETOOTH" />
+              <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
+              <application
+                  android:allowBackup="true"
+                  android:icon="@android:drawable/ic_btn_speak_now"
+                  android:label="HD İşitme Cihazı"
+                  android:supportsRtl="true"
+                  android:theme="@style/Theme.AppCompat.NoActionBar">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:configChanges="orientation|screenSize|keyboardHidden"
+                      android:exported="true"
+                      android:launchMode="singleTask">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+
+                  <service
+                      android:name=".KeepAliveService"
+                      android:enabled="true"
+                      android:exported="false"
+                      android:foregroundServiceType="microphone" />
+              </application>
+          </manifest>
+          EOF
+
+          cat << 'EOF' > app/src/main/java/com/resul/isitme/KeepAliveService.kt
+          package com.resul.isitme
+
+          import android.app.*
+          import android.content.Context
+          import android.content.Intent
+          import android.content.pm.ServiceInfo
+          import android.os.Build
+          import android.os.IBinder
+          import android.os.PowerManager
+          import androidx.core.app.NotificationCompat
+
+          class KeepAliveService : Service() {
+              private var wakeLock: PowerManager.WakeLock? = null
+
+              override fun onCreate() {
+                  super.onCreate()
+                  val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+                  wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "IsitmeCihazi::AudioWakeLock")
+                  wakeLock?.acquire()
+              }
+
+              override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+                  val channelId = "hearing_aid_channel"
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                      val channel = NotificationChannel(
+                          channelId,
+                          "HD İşitme Cihazı Arka Plan Servisi",
+                          NotificationManager.IMPORTANCE_LOW
+                      )
+                      val nm = getSystemService(NotificationManager::class.java)
+                      nm.createNotificationChannel(channel)
+                  }
+
+                  val pendingIntent = PendingIntent.getActivity(
+                      this, 0, Intent(this, MainActivity::class.java),
+                      PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+                  )
+
+                  val notification = NotificationCompat.Builder(this, channelId)
+                      .setContentTitle("HD Klinik İşitme Cihazı Aktif")
+                      .setContentText("Arka planda kesintisiz çalışıyor")
+                      .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+                      .setContentIntent(pendingIntent)
+                      .setOngoing(true)
+                      .build()
+
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                      startForeground(1, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+                  } else {
+                      startForeground(1, notification)
+                  }
+
+                  return START_STICKY
+              }
+
+              override fun onDestroy() {
+                  wakeLock?.let { if (it.isHeld) it.release() }
+                  super.onDestroy()
+              }
+
+              override fun onBind(intent: Intent?): IBinder? = null
+          }
+          EOF
+
+          cat << 'EOF' > app/src/main/java/com/resul/isitme/MainActivity.kt
+          package com.resul.isitme
+
+          import android.Manifest
+          import android.content.Context
+          import android.content.Intent
+          import android.content.pm.PackageManager
+          import android.os.Build
+          import android.os.Bundle
+          import android.view.View
+          import android.webkit.*
+          import androidx.appcompat.app.AppCompatActivity
+          import androidx.core.app.ActivityCompat
+          import androidx.core.content.ContextCompat
+          import androidx.webkit.WebViewAssetLoader
+
+          class AlwaysAwakeWebView(context: Context) : WebView(context) {
+              override fun onWindowVisibilityChanged(visibility: Int) {
+                  super.onWindowVisibilityChanged(View.VISIBLE)
+              }
+          }
+
+          class MainActivity : AppCompatActivity() {
+              private lateinit var webView: AlwaysAwakeWebView
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+
+                  webView = AlwaysAwakeWebView(this)
+                  setContentView(webView)
+
+                  val assetLoader = WebViewAssetLoader.Builder()
+                      .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
+                      .build()
+
+                  webView.settings.apply {
+                      javaScriptEnabled = true
+                      domStorageEnabled = true
+                      mediaPlaybackRequiresUserGesture = false
+                      allowFileAccess = true
+                  }
+
+                  webView.webViewClient = object : WebViewClient() {
+                      override fun shouldInterceptRequest(
+                          view: WebView,
+                          request: WebResourceRequest
+                      ): WebResourceResponse? {
+                          return assetLoader.shouldInterceptRequest(request.url)
+                      }
+                  }
+
+                  webView.webChromeClient = object : WebChromeClient() {
+                      override fun onPermissionRequest(request: PermissionRequest) {
+                          runOnUiThread {
+                              request.grant(request.resources)
+                          }
+                      }
+                  }
+
+                  checkAndRequestPermissions()
+                  webView.loadUrl("https://appassets.androidplatform.net/assets/index.html")
+              }
+
+              private fun checkAndRequestPermissions() {
+                  val perms = mutableListOf(Manifest.permission.RECORD_AUDIO)
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                      perms.add(Manifest.permission.POST_NOTIFICATIONS)
+                  }
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                      perms.add(Manifest.permission.BLUETOOTH_CONNECT)
+                  }
+
+                  val needed = perms.filter {
+                      ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+                  }
+
+                  if (needed.isNotEmpty()) {
+                      ActivityCompat.requestPermissions(this, needed.toTypedArray(), 101)
+                  } else {
+                      startKeepAliveService()
+                  }
+              }
+
+              override fun onRequestPermissionsResult(
+                  requestCode: Int,
+                  permissions: Array<out String>,
+                  grantResults: IntArray
+              ) {
+                  super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+                  if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                      startKeepAliveService()
+                  }
+              }
+
+              private fun startKeepAliveService() {
+                  val intent = Intent(this, KeepAliveService::class.java)
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                      startForegroundService(intent)
+                  } else {
+                      startService(intent)
+                  }
+              }
+
+              override fun onDestroy() {
+                  stopService(Intent(this, KeepAliveService::class.java))
+                  super.onDestroy()
+              }
+          }
+          EOF
+
+          ./gradlew assembleDebug
+          cp app/build/outputs/apk/debug/app-debug.apk ../HD-Isitme-Cihazi.apk
+
+      - name: APK Dosyasini Releases Sayfasina Yayinla
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0
+          name: "HD Klinik İşitme Cihazı APK"
+          files: HD-Isitme-Cihazi.apk
+          overwrite: true
+          
