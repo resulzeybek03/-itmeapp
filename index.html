@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Canlı Ses & Konuşma Netleştirici</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; margin: 0; background: #121212; color: #fff; padding: 16px; box-sizing: border-box; }
+    .card { background: #1e1e1e; padding: 22px; border-radius: 18px; width: 100%; max-width: 400px; box-shadow: 0 8px 28px rgba(0,0,0,0.6); }
+    h2 { margin: 0 0 12px 0; text-align: center; color: #00e676; font-size: 22px; }
+    .warning { background: #2c2018; color: #ffb74d; padding: 10px; border-radius: 8px; font-size: 13px; text-align: center; margin-bottom: 16px; }
+    .control { margin: 16px 0; }
+    .label-row { display: flex; justify-content: space-between; font-size: 14px; margin-bottom: 6px; color: #ddd; }
+    .val-badge { color: #00e676; font-weight: bold; }
+    select, input[type="range"] { width: 100%; padding: 8px; border-radius: 8px; background: #2c2c2c; color: #fff; border: 1px solid #444; box-sizing: border-box; accent-color: #00e676; }
+    .checkbox-row { display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 14px; color: #ddd; }
+    .checkbox-row input { width: 18px; height: 18px; accent-color: #00e676; }
+    .meter-container { width: 100%; height: 10px; background: #2c2c2c; border-radius: 6px; overflow: hidden; margin-top: 14px; }
+    .meter-bar { height: 100%; width: 0%; background: linear-gradient(90deg, #00e676, #ffeb3b, #ff5252); transition: width 0.05s linear; }
+    button { width: 100%; padding: 16px; font-size: 18px; border-radius: 12px; border: none; background: #00e676; color: #000; font-weight: bold; cursor: pointer; margin-top: 16px; transition: 0.2s; }
+    button.active { background: #ff5252; color: #fff; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Ses & Konuşma Netleştirici</h2>
+    <div class="warning">Çınlamayı önlemek için başlatmadan önce kulaklığınızı takın!</div>
+
+    <div class="control">
+      <div class="label-row"><span>Kullanılacak Mikrofon:</span></div>
+      <select id="micSelect">
+        <option value="">Varsayılan Mikrofon</option>
+      </select>
+    </div>
+
+    <div class="control">
+      <div class="label-row">
+        <span>Genel Ses Yükseltme (Gain):</span>
+        <span id="gainVal" class="val-badge">3.0x</span>
+      </div>
+      <input type="range" id="gainSlider" min="1" max="10" step="0.5" value="3">
+    </div>
+
+    <div class="control">
+      <div class="label-row">
+        <span>Konuşma Netleştirme (2.5 kHz):</span>
+        <span id="clarityVal" class="val-badge">+8 dB</span>
+      </div>
+      <input type="range" id="claritySlider" min="0" max="15" step="1" value="8">
+    </div>
+
+    <div class="control">
+      <label class="checkbox-row">
+        <input type="checkbox" id="noiseToggle" checked>
+        <span>Dip Uğultu ve Tıslama Kesici Filtre</span>
+      </label>
+    </div>
+
+    <div class="meter-container" title="Canlı Ses Seviyesi">
+      <div id="meterBar" class="meter-bar"></div>
+    </div>
+
+    <button id="btn">Dinlemeyi Başlat</button>
+  </div>
+
+  <script>
+    let audioCtx, stream, gainNode, highPass, lowPass, mudCutFilter, clarityFilter, analyser, animId;
+    const btn = document.getElementById('btn');
+    const gainSlider = document.getElementById('gainSlider');
+    const gainVal = document.getElementById('gainVal');
+    const claritySlider = document.getElementById('claritySlider');
+    const clarityVal = document.getElementById('clarityVal');
+    const noiseToggle = document.getElementById('noiseToggle');
+    const micSelect = document.getElementById('micSelect');
+    const meterBar = document.getElementById('meterBar');
+
+    async function loadMicrophones() {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const mics = devices.filter(d => d.kind === 'audioinput');
+        const currentSelection = micSelect.value;
+        micSelect.innerHTML = '';
+        mics.forEach((mic, index) => {
+          const opt = document.createElement('option');
+          opt.value = mic.deviceId;
+          opt.textContent = mic.label || `Mikrofon ${index + 1}`;
+          micSelect.appendChild(opt);
+        });
+        if (currentSelection) micSelect.value = currentSelection;
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    // Genel ses yükseltme ayarı (Canlı güncellenir)
+    gainSlider.oninput = () => {
+      gainVal.textContent = `${gainSlider.value}x`;
+      if (gainNode) gainNode.gain.value = parseFloat(gainSlider.value);
+    };
+
+    // Konuşma netleştirme ekolayzır ayarı (Canlı güncellenir)
+    claritySlider.oninput = () => {
+      const db = parseFloat(claritySlider.value);
+      clarityVal.textContent = db > 0 ? `+${db} dB` : `Kapalı (0 dB)`;
+      if (clarityFilter && mudCutFilter) {
+        clarityFilter.gain.value = db;
+        // Netleştirme açıldıkça 350 Hz'deki boğuk oda yankısını da kısar (-4 dB'e kadar)
+        mudCutFilter.gain.value = db > 0 ? -4 : 0;
+      }
+    };
+
+    // Dip gürültü filtresi aç/kapa (Canlı güncellenir)
+    noiseToggle.onchange = () => {
+      if (highPass && lowPass) {
+        highPass.frequency.value = noiseToggle.checked ? 250 : 20;
+        lowPass.frequency.value = noiseToggle.checked ? 6000 : 20000;
+      }
+    };
+
+    function updateMeter() {
+      if (!analyser) return;
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      analyser.getByteTimeDomainData(data);
+      let max = 0;
+      for (let i = 0; i < data.length; i++) {
+        const v = Math.abs(data[i] - 128);
+        if (v > max) max = v;
+      }
+      const percent = Math.min(100, (max / 64) * 100);
+      meterBar.style.width = percent + '%';
+      animId = requestAnimationFrame(updateMeter);
+    }
+
+    btn.onclick = async () => {
+      if (!audioCtx) {
+        try {
+          const useNoiseSuppression = noiseToggle.checked;
+          const selectedMic = micSelect.value;
+
+          const audioConstraints = {
+            echoCancellation: false,
+            noiseSuppression: useNoiseSuppression,
+            autoGainControl: false,
+            latency: 0
+          };
+          if (selectedMic) {
+            audioConstraints.deviceId = { exact: selectedMic };
+          }
+
+          stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
+          await loadMicrophones();
+
+          audioCtx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
+          const source = audioCtx.createMediaStreamSource(stream);
+
+          // 1. High-Pass: 250 Hz altındaki klima/rüzgar/masa uğultusunu keser
+          highPass = audioCtx.createBiquadFilter();
+          highPass.type = 'highpass';
+          highPass.frequency.value = useNoiseSuppression ? 250 : 20;
+
+          // 2. Boğukluk Kesici (Mud Cut): 350 Hz'deki oda yankısını azaltır
+          const clarityDb = parseFloat(claritySlider.value);
+          mudCutFilter = audioCtx.createBiquadFilter();
+          mudCutFilter.type = 'peaking';
+          mudCutFilter.frequency.value = 350;
+          mudCutFilter.Q.value = 1.2;
+          mudCutFilter.gain.value = clarityDb > 0 ? -4 : 0;
+
+          // 3. Konuşma Parlatıcı (Voice Clarity): 2500 Hz konuşma frekansını öne çıkarır
+          clarityFilter = audioCtx.createBiquadFilter();
+          clarityFilter.type = 'peaking';
+          clarityFilter.frequency.value = 2500;
+          clarityFilter.Q.value = 1.0;
+          clarityFilter.gain.value = clarityDb;
+
+          // 4. Low-Pass: 6000 Hz üstündeki tiz elektronik tıslamayı keser
+          lowPass = audioCtx.createBiquadFilter();
+          lowPass.type = 'lowpass';
+          lowPass.frequency.value = useNoiseSuppression ? 6000 : 20000;
+
+          // 5. Compressor: Ani yüksek seslerin kulağı rahatsız etmesini önler
+          const compressor = audioCtx.createDynamicsCompressor();
+          compressor.threshold.value = -24;
+          compressor.knee.value = 25;
+          compressor.ratio.value = 12;
+          compressor.attack.value = 0.003;
+          compressor.release.value = 0.25;
+
+          // 6. Gain: Genel Ses Yükseltici
+          gainNode = audioCtx.createGain();
+          gainNode.gain.value = parseFloat(gainSlider.value);
+
+          // 7. Görsel Ses Seviyesi Ölçer
+          analyser = audioCtx.createAnalyser();
+          analyser.fftSize = 256;
+
+          // Tüm ses işleme zincirini sırayla bağla
+          source
+            .connect(highPass)
+            .connect(mudCutFilter)
+            .connect(clarityFilter)
+            .connect(lowPass)
+            .connect(compressor)
+            .connect(gainNode);
+
+          gainNode.connect(audioCtx.destination);
+          gainNode.connect(analyser);
+
+          updateMeter();
+
+          btn.textContent = "Durdur";
+          btn.classList.add('active');
+        } catch (err) {
+          alert("Mikrofon başlatılamadı: " + err.message);
+        }
+      } else {
+        cancelAnimationFrame(animId);
+        meterBar.style.width = '0%';
+        stream.getTracks().forEach(track => track.stop());
+        await audioCtx.close();
+        audioCtx = null;
+        btn.textContent = "Dinlemeyi Başlat";
+        btn.classList.remove('active');
+      }
+    };
+  </script>
+</body>
+</html>
