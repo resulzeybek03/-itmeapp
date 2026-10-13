@@ -21,18 +21,15 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Android Projesini Olustur ve Derle
+      - name: Saf Android Projesini Olustur ve Derle
         run: |
           mkdir -p android-app
           cd android-app
 
-          # Gradle 9.8.0 hatasını önlemek için önce temel settings.gradle oluşturulur
           echo 'rootProject.name = "IsitmeCihazi"' > settings.gradle
           gradle wrapper --gradle-version 8.5
 
           mkdir -p app/src/main/java/com/resul/isitme
-          mkdir -p app/src/main/assets
-          cp ../index.html app/src/main/assets/index.html
 
           cat << 'EOF' > settings.gradle
           pluginManagement {
@@ -79,14 +76,8 @@ jobs:
                   applicationId "com.resul.isitme"
                   minSdk 26
                   targetSdk 34
-                  versionCode 1
-                  versionName "1.0"
-              }
-
-              buildTypes {
-                  debug {
-                      minifyEnabled false
-                  }
+                  versionCode 3
+                  versionName "3.0"
               }
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
@@ -100,14 +91,12 @@ jobs:
           dependencies {
               implementation 'androidx.core:core-ktx:1.12.0'
               implementation 'androidx.appcompat:appcompat:1.6.1'
-              implementation 'androidx.webkit:webkit:1.10.0'
           }
           EOF
 
           cat << 'EOF' > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-
               <uses-permission android:name="android.permission.RECORD_AUDIO" />
               <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -144,6 +133,224 @@ jobs:
           </manifest>
           EOF
 
+          cat << 'EOF' > app/src/main/java/com/resul/isitme/AudioEngine.kt
+          package com.resul.isitme
+
+          import android.content.Context
+          import android.media.*
+          import android.media.audiofx.NoiseSuppressor
+          import kotlin.math.*
+
+          class Biquad {
+              private var b0 = 1.0; private var b1 = 0.0; private var b2 = 0.0
+              private var a1 = 0.0; private var a2 = 0.0
+              private var x1 = 0.0; private var x2 = 0.0
+              private var y1 = 0.0; private var y2 = 0.0
+
+              fun process(x: Double): Double {
+                  val y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2
+                  x2 = x1; x1 = x; y2 = y1; y1 = y
+                  return y
+              }
+
+              fun setHighPass(freq: Double, sr: Double, q: Double = 0.707) {
+                  val w0 = 2.0 * PI * freq / sr
+                  val cosw = cos(w0); val alpha = sin(w0) / (2.0 * q)
+                  val a0 = 1.0 + alpha
+                  b0 = ((1.0 + cosw) / 2.0) / a0
+                  b1 = -(1.0 + cosw) / a0
+                  b2 = ((1.0 + cosw) / 2.0) / a0
+                  a1 = (-2.0 * cosw) / a0
+                  a2 = (1.0 - alpha) / a0
+              }
+
+              fun setPeaking(freq: Double, sr: Double, q: Double, gainDb: Double) {
+                  val a = 10.0.pow(gainDb / 40.0)
+                  val w0 = 2.0 * PI * freq / sr
+                  val cosw = cos(w0); val alpha = sin(w0) / (2.0 * q)
+                  val a0 = 1.0 + alpha / a
+                  b0 = (1.0 + alpha * a) / a0
+                  b1 = (-2.0 * cosw) / a0
+                  b2 = (1.0 - alpha * a) / a0
+                  a1 = (-2.0 * cosw) / a0
+                  a2 = (1.0 - alpha / a) / a0
+              }
+          }
+
+          object AudioEngine {
+              @Volatile var isRunning = false
+              @Volatile var isReplaying = false
+              @Volatile var currentLevel = 0
+
+              @Volatile var gain = 3.5
+              @Volatile var clarityDb = 10.0
+              @Volatile var gateThresh = 0.005
+              @Volatile var highPassHz = 180.0
+              @Volatile var pan = 0.0
+              @Volatile var micMode = 0
+              @Volatile var useCustomAudiogram = false
+              @Volatile var customGains = doubleArrayOf(2.0, 4.0, 8.0, 12.0, 12.0)
+              @Volatile var filtersDirty = true
+
+              private var audioThread: Thread? = null
+              private var testThread: Thread? = null
+              @Volatile private var isTestPlaying = false
+              @Volatile private var testFreq = 1000.0
+              @Volatile private var testDb = 20.0
+
+              private const val SAMPLE_RATE = 48000
+              private val ringBuffer = ShortArray(SAMPLE_RATE * 8)
+              @Volatile private var ringWritePos = 0
+
+              fun start(context: Context) {
+                  if (isRunning) return
+                  stopTestTone()
+                  isRunning = true
+                  isReplaying = false
+
+                  audioThread = Thread {
+                      android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
+                      val minIn = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT).coerceAtLeast(1024)
+                      val minOut = AudioTrack.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_16BIT).coerceAtLeast(2048)
+
+                      val sourceType = when (micMode) {
+                          1 -> MediaRecorder.AudioSource.CAMCORDER
+                          2 -> MediaRecorder.AudioSource.MIC
+                          else -> MediaRecorder.AudioSource.VOICE_RECOGNITION
+                      }
+
+                      val recorder = AudioRecord(sourceType, SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, minIn)
+
+                      try {
+                          val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                          val builtIn = am.getDevices(AudioManager.GET_DEVICES_INPUTS).firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_MIC }
+                          if (builtIn != null) recorder.setPreferredDevice(builtIn)
+                      } catch (_: Exception) {}
+
+                      var ns: NoiseSuppressor? = null
+                      try {
+                          if (NoiseSuppressor.isAvailable()) {
+                              ns = NoiseSuppressor.create(recorder.audioSessionId)
+                              ns?.enabled = false
+                          }
+                      } catch (_: Exception) {}
+
+                      val player = AudioTrack.Builder()
+                          .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+                          .setAudioFormat(AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT).setSampleRate(SAMPLE_RATE).setChannelMask(AudioFormat.CHANNEL_OUT_STEREO).build())
+                          .setBufferSizeInBytes(minOut)
+                          .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+                          .build()
+
+                      val hp = Biquad(); val mud = Biquad()
+                      val eqs = Array(5) { Biquad() }
+                      val freqs = doubleArrayOf(500.0, 1000.0, 2400.0, 4500.0, 6000.0)
+
+                      val inBuf = ShortArray(256)
+                      val outBuf = ShortArray(512)
+                      var env = 0.0; var gGain = 1.0
+                      var replayReadPos = 0; var wasReplaying = false
+
+                      recorder.startRecording()
+                      player.play()
+
+                      while (isRunning) {
+                          if (filtersDirty) {
+                              val sr = SAMPLE_RATE.toDouble()
+                              hp.setHighPass(highPassHz, sr)
+                              mud.setPeaking(320.0, sr, 1.1, if (highPassHz > 150) -6.0 else -2.5)
+                              for (k in 0..4) {
+                                  val db = if (useCustomAudiogram) customGains[k] else when (k) {
+                                      0 -> 0.0; 1 -> clarityDb * 0.4; 2 -> clarityDb * 0.9; 3 -> clarityDb * 1.15; else -> clarityDb * 0.8
+                                  }
+                                  eqs[k].setPeaking(freqs[k], sr, 0.9, db)
+                              }
+                              filtersDirty = false
+                          }
+
+                          val read = recorder.read(inBuf, 0, inBuf.size)
+                          if (read > 0) {
+                              if (isReplaying && !wasReplaying) { replayReadPos = ringWritePos; wasReplaying = true }
+                              else if (!isReplaying) { wasReplaying = false }
+
+                              val lGain = if (pan <= 0.0) 1.0 else (1.0 - pan)
+                              val rGain = if (pan >= 0.0) 1.0 else (1.0 + pan)
+                              var peak = 0.0
+
+                              for (i in 0 until read) {
+                                  val outS: Short
+                                  if (isReplaying) {
+                                      outS = ringBuffer[replayReadPos]
+                                      replayReadPos = (replayReadPos + 1) % ringBuffer.size
+                                      if (replayReadPos == ringWritePos) isReplaying = false
+                                  } else {
+                                      var x = inBuf[i] / 32768.0
+                                      val ax = abs(x)
+                                      env = if (ax > env) 0.93 * env + 0.07 * ax else 0.9993 * env + 0.0007 * ax
+                                      val tg = if (gateThresh > 0.0 && env < gateThresh) 0.12 else if (env < 0.05) 1.35 else 1.0
+                                      gGain = 0.985 * gGain + 0.015 * tg
+
+                                      x = mud.process(hp.process(x))
+                                      for (k in 0..4) x = eqs[k].process(x)
+
+                                      var y = x * gGain * gain
+                                      if (abs(y) > 0.65) y = tanh(y * 1.1)
+                                      if (abs(y) > peak) peak = abs(y)
+
+                                      outS = (y * 32767.0).coerceIn(-32768.0, 32767.0).toInt().toShort()
+                                      ringBuffer[ringWritePos] = outS
+                                      ringWritePos = (ringWritePos + 1) % ringBuffer.size
+                                  }
+                                  outBuf[i * 2] = (outS * lGain).toInt().toShort()
+                                  outBuf[i * 2 + 1] = (outS * rGain).toInt().toShort()
+                              }
+                              currentLevel = (peak * 100.0).toInt().coerceIn(0, 100)
+                              player.write(outBuf, 0, read * 2)
+                          }
+                      }
+                      currentLevel = 0
+                      try { ns?.release(); recorder.stop(); recorder.release(); player.stop(); player.release() } catch (_: Exception) {}
+                  }.apply { start() }
+              }
+
+              fun stop() {
+                  isRunning = false; isReplaying = false
+                  try { audioThread?.join(300) } catch (_: Exception) {}
+                  audioThread = null; currentLevel = 0
+              }
+
+              fun startTestTone(freqHz: Int, dbLevel: Int) {
+                  testFreq = freqHz.toDouble(); testDb = dbLevel.toDouble()
+                  if (isTestPlaying) return
+                  isTestPlaying = true
+                  testThread = Thread {
+                      val sr = 48000
+                      val track = AudioTrack.Builder()
+                          .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).build())
+                          .setAudioFormat(AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT).setSampleRate(sr).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
+                          .setBufferSizeInBytes(4096).build()
+                      val buf = ShortArray(1024); var phase = 0.0; var cnt = 0
+                      track.play()
+                      while (isTestPlaying) {
+                          val amp = if ((cnt / (sr / 3)) % 2 == 0) 10.0.pow((testDb - 75.0) / 20.0).coerceIn(0.0001, 0.9) else 0.0
+                          val step = 2.0 * PI * testFreq / sr
+                          for (i in buf.indices) {
+                              buf[i] = (sin(phase) * amp * 32767.0).toInt().toShort()
+                              phase = (phase + step) % (2.0 * PI)
+                          }
+                          cnt += buf.size; track.write(buf, 0, buf.size)
+                      }
+                      try { track.stop(); track.release() } catch (_: Exception) {}
+                  }.apply { start() }
+              }
+
+              fun stopTestTone() {
+                  isTestPlaying = false
+                  try { testThread?.join(200) } catch (_: Exception) {}
+              }
+          }
+          EOF
+
           cat << 'EOF' > app/src/main/java/com/resul/isitme/KeepAliveService.kt
           package com.resul.isitme
 
@@ -151,9 +358,7 @@ jobs:
           import android.content.Context
           import android.content.Intent
           import android.content.pm.ServiceInfo
-          import android.os.Build
-          import android.os.IBinder
-          import android.os.PowerManager
+          import android.os.*
           import androidx.core.app.NotificationCompat
 
           class KeepAliveService : Service() {
@@ -162,45 +367,33 @@ jobs:
               override fun onCreate() {
                   super.onCreate()
                   val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-                  wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "IsitmeCihazi::AudioWakeLock")
-                  wakeLock?.acquire()
+                  wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "IsitmeCihazi::Lock").apply { acquire() }
               }
 
               override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-                  val channelId = "hearing_aid_channel"
+                  val chId = "ha_ch"
                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                      val channel = NotificationChannel(
-                          channelId,
-                          "HD İşitme Cihazı Arka Plan Servisi",
-                          NotificationManager.IMPORTANCE_LOW
-                      )
-                      val nm = getSystemService(NotificationManager::class.java)
-                      nm.createNotificationChannel(channel)
+                      val ch = NotificationChannel(chId, "İşitme Cihazı Servisi", NotificationManager.IMPORTANCE_LOW)
+                      getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
                   }
-
-                  val pendingIntent = PendingIntent.getActivity(
-                      this, 0, Intent(this, MainActivity::class.java),
-                      PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-                  )
-
-                  val notification = NotificationCompat.Builder(this, channelId)
+                  val pi = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
+                  val notif = NotificationCompat.Builder(this, chId)
                       .setContentTitle("HD Klinik İşitme Cihazı Aktif")
-                      .setContentText("Arka planda kesintisiz çalışıyor")
+                      .setContentText("0 ms yerel ses motoru çalışıyor")
                       .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-                      .setContentIntent(pendingIntent)
-                      .setOngoing(true)
-                      .build()
+                      .setContentIntent(pi).setOngoing(true).build()
 
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                      startForeground(1, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
-                  } else {
-                      startForeground(1, notification)
-                  }
+                  try {
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) startForeground(1, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+                      else startForeground(1, notif)
+                  } catch (_: Exception) {}
 
+                  AudioEngine.start(applicationContext)
                   return START_STICKY
               }
 
               override fun onDestroy() {
+                  AudioEngine.stop()
                   wakeLock?.let { if (it.isHeld) it.release() }
                   super.onDestroy()
               }
@@ -213,126 +406,40 @@ jobs:
           package com.resul.isitme
 
           import android.Manifest
-          import android.content.Context
           import android.content.Intent
           import android.content.pm.PackageManager
-          import android.os.Build
-          import android.os.Bundle
-          import android.view.View
-          import android.webkit.*
+          import android.graphics.Color
+          import android.graphics.drawable.GradientDrawable
+          import android.os.*
+          import android.view.*
+          import android.widget.*
+          import androidx.appcompat.app.AlertDialog
           import androidx.appcompat.app.AppCompatActivity
           import androidx.core.app.ActivityCompat
           import androidx.core.content.ContextCompat
-          import androidx.webkit.WebViewAssetLoader
-
-          class AlwaysAwakeWebView(context: Context) : WebView(context) {
-              override fun onWindowVisibilityChanged(visibility: Int) {
-                  super.onWindowVisibilityChanged(View.VISIBLE)
-              }
-          }
 
           class MainActivity : AppCompatActivity() {
-              private lateinit var webView: AlwaysAwakeWebView
+              private lateinit var btnMain: Button
+              private lateinit var btnReplay: Button
+              private lateinit var meterBar: ProgressBar
+              private lateinit var statusTv: TextView
+              private lateinit var blackoutLayer: FrameLayout
+              private val uiHandler = Handler(Looper.getMainLooper())
 
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
 
-                  webView = AlwaysAwakeWebView(this)
-                  setContentView(webView)
-
-                  val assetLoader = WebViewAssetLoader.Builder()
-                      .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
-                      .build()
-
-                  webView.settings.apply {
-                      javaScriptEnabled = true
-                      domStorageEnabled = true
-                      mediaPlaybackRequiresUserGesture = false
-                      allowFileAccess = true
+                  val root = FrameLayout(this).apply { setBackgroundColor(Color.parseColor("#0B0D11")) }
+                  val scroll = ScrollView(this)
+                  val card = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      setPadding(45, 50, 45, 50)
                   }
 
-                  webView.webViewClient = object : WebViewClient() {
-                      override fun shouldInterceptRequest(
-                          view: WebView,
-                          request: WebResourceRequest
-                      ): WebResourceResponse? {
-                          return assetLoader.shouldInterceptRequest(request.url)
-                      }
+                  val title = TextView(this).apply {
+                      text = "HD Klinik İşitme Cihazı v3.0"
+                      textSize = 21f
+                      setTextColor(Color.parseColor("#00E676"))
+                      gravity = Gravity.CENTER
                   }
-
-                  webView.webChromeClient = object : WebChromeClient() {
-                      override fun onPermissionRequest(request: PermissionRequest) {
-                          runOnUiThread {
-                              request.grant(request.resources)
-                          }
-                      }
-                  }
-
-                  checkAndRequestPermissions()
-                  webView.loadUrl("https://appassets.androidplatform.net/assets/index.html")
-              }
-
-              private fun checkAndRequestPermissions() {
-                  val perms = mutableListOf(Manifest.permission.RECORD_AUDIO)
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                      perms.add(Manifest.permission.POST_NOTIFICATIONS)
-                  }
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                      perms.add(Manifest.permission.BLUETOOTH_CONNECT)
-                  }
-
-                  val needed = perms.filter {
-                      ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
-                  }
-
-                  if (needed.isNotEmpty()) {
-                      ActivityCompat.requestPermissions(this, needed.toTypedArray(), 101)
-                  } else {
-                      startKeepAliveService()
-                  }
-              }
-
-              override fun onRequestPermissionsResult(
-                  requestCode: Int,
-                  permissions: Array<out String>,
-                  grantResults: IntArray
-              ) {
-                  super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-                  if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-                      startKeepAliveService()
-                  }
-              }
-
-              private fun startKeepAliveService() {
-                  val intent = Intent(this, KeepAliveService::class.java)
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                      startForegroundService(intent)
-                  } else {
-                      startService(intent)
-                  }
-              }
-
-              override fun onDestroy() {
-                  stopService(Intent(this, KeepAliveService::class.java))
-                  super.onDestroy()
-              }
-          }
-          EOF
-
-          chmod +x ./gradlew
-          ./gradlew assembleDebug
-          cp app/build/outputs/apk/debug/app-debug.apk ../HD-Isitme-Cihazi.apk
-
-      - name: APK Dosyasini Actions Sekmesine Yukle
-        uses: actions/upload-artifact@v4
-        with:
-          name: HD-Isitme-Cihazi-APK
-          path: HD-Isitme-Cihazi.apk
-
-      - name: APK Dosyasini Releases Sayfasina Yayinla
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v1.0
-          name: "HD Klinik İşitme Cihazı APK"
-          files: HD-Isitme-Cihazi.apk
-          overwrite: true
+          
