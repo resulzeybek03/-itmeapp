@@ -3,6 +3,8 @@ name: Android APK Uretici
 on:
   push:
     branches: [ "main" ]
+    paths-ignore:
+      - "HD-Isitme-Cihazi.apk"
   workflow_dispatch:
 
 permissions:
@@ -18,20 +20,15 @@ jobs:
       - name: Java 17 Kur
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
-          java-version: '17'
+          distribution: "temurin"
+          java-version: "17"
 
-      - name: Saf Android Projesini Olustur ve Derle
+      - name: Saf Android APK Derle ve Kaydet
         run: |
-          mkdir -p android-app
+          mkdir -p android-app/app/src/main/java/com/resul/isitme
           cd android-app
 
-          echo 'rootProject.name = "IsitmeCihazi"' > settings.gradle
-          gradle wrapper --gradle-version 8.5
-
-          mkdir -p app/src/main/java/com/resul/isitme
-
-          cat << 'EOF' > settings.gradle
+          echo '
           pluginManagement {
               repositories {
                   google()
@@ -47,31 +44,31 @@ jobs:
               }
           }
           rootProject.name = "IsitmeCihazi"
-          include ':app'
-          EOF
+          include ":app"
+          ' > settings.gradle
 
-          cat << 'EOF' > gradle.properties
+          gradle wrapper --gradle-version 8.5
+
+          echo '
           org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
           android.useAndroidX=true
-          EOF
+          ' > gradle.properties
 
-          cat << 'EOF' > build.gradle
+          echo '
           plugins {
-              id 'com.android.application' version '8.2.2' apply false
-              id 'org.jetbrains.kotlin.android' version '1.9.22' apply false
+              id "com.android.application" version "8.2.2" apply false
+              id "org.jetbrains.kotlin.android" version "1.9.22" apply false
           }
-          EOF
+          ' > build.gradle
 
-          cat << 'EOF' > app/build.gradle
+          echo '
           plugins {
-              id 'com.android.application'
-              id 'org.jetbrains.kotlin.android'
+              id "com.android.application"
+              id "org.jetbrains.kotlin.android"
           }
-
           android {
-              namespace 'com.resul.isitme'
+              namespace "com.resul.isitme"
               compileSdk 34
-
               defaultConfig {
                   applicationId "com.resul.isitme"
                   minSdk 26
@@ -84,18 +81,16 @@ jobs:
                   targetCompatibility JavaVersion.VERSION_17
               }
               kotlinOptions {
-                  jvmTarget = '17'
+                  jvmTarget = "17"
               }
           }
-
           dependencies {
-              implementation 'androidx.core:core-ktx:1.12.0'
-              implementation 'androidx.appcompat:appcompat:1.6.1'
+              implementation "androidx.core:core-ktx:1.12.0"
+              implementation "androidx.appcompat:appcompat:1.6.1"
           }
-          EOF
+          ' > app/build.gradle
 
-          cat << 'EOF' > app/src/main/AndroidManifest.xml
-          <?xml version="1.0" encoding="utf-8"?>
+          echo '<?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.RECORD_AUDIO" />
               <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
@@ -131,9 +126,9 @@ jobs:
                       android:foregroundServiceType="microphone" />
               </application>
           </manifest>
-          EOF
+          ' > app/src/main/AndroidManifest.xml
 
-          cat << 'EOF' > app/src/main/java/com/resul/isitme/AudioEngine.kt
+          echo '
           package com.resul.isitme
 
           import android.content.Context
@@ -349,9 +344,9 @@ jobs:
                   try { testThread?.join(200) } catch (_: Exception) {}
               }
           }
-          EOF
+          ' > app/src/main/java/com/resul/isitme/AudioEngine.kt
 
-          cat << 'EOF' > app/src/main/java/com/resul/isitme/KeepAliveService.kt
+          echo '
           package com.resul.isitme
 
           import android.app.*
@@ -400,9 +395,9 @@ jobs:
 
               override fun onBind(intent: Intent?): IBinder? = null
           }
-          EOF
+          ' > app/src/main/java/com/resul/isitme/KeepAliveService.kt
 
-          cat << 'EOF' > app/src/main/java/com/resul/isitme/MainActivity.kt
+          echo '
           package com.resul.isitme
 
           import android.Manifest
@@ -442,4 +437,7 @@ jobs:
                       setTextColor(Color.parseColor("#00E676"))
                       gravity = Gravity.CENTER
                   }
-          
+                  val sub = TextView(this).apply {
+                      text = "⚡ %100 Yerel Android Ses Motoru (Sıfır Gecikme)"
+                      textSize = 12f
+                   
