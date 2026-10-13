@@ -25,6 +25,9 @@ jobs:
         run: |
           mkdir -p android-app
           cd android-app
+
+          # Gradle 9.8.0 hatasını önlemek için önce temel settings.gradle oluşturulur
+          echo 'rootProject.name = "IsitmeCihazi"' > settings.gradle
           gradle wrapper --gradle-version 8.5
 
           mkdir -p app/src/main/java/com/resul/isitme
@@ -316,8 +319,15 @@ jobs:
           }
           EOF
 
+          chmod +x ./gradlew
           ./gradlew assembleDebug
           cp app/build/outputs/apk/debug/app-debug.apk ../HD-Isitme-Cihazi.apk
+
+      - name: APK Dosyasini Actions Sekmesine Yukle
+        uses: actions/upload-artifact@v4
+        with:
+          name: HD-Isitme-Cihazi-APK
+          path: HD-Isitme-Cihazi.apk
 
       - name: APK Dosyasini Releases Sayfasina Yayinla
         uses: softprops/action-gh-release@v2
@@ -326,4 +336,3 @@ jobs:
           name: "HD Klinik İşitme Cihazı APK"
           files: HD-Isitme-Cihazi.apk
           overwrite: true
-          
