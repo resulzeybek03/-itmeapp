@@ -33,6 +33,7 @@ jobs:
       - name: Proje dosyalarini olustur
         run: |
           mkdir -p android-app/app/src/main/java/com/resul/isitme
+          mkdir -p android-app/app/src/main/res/values
           cd android-app
 
           cat > settings.gradle << 'EOF'
@@ -81,8 +82,8 @@ jobs:
                   applicationId "com.resul.isitme"
                   minSdk 26
                   targetSdk 34
-                  versionCode 6
-                  versionName "6.0"
+                  versionCode 7
+                  versionName "7.0"
               }
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
@@ -96,6 +97,13 @@ jobs:
               implementation "androidx.core:core-ktx:1.12.0"
               implementation "androidx.appcompat:appcompat:1.6.1"
           }
+          EOF
+
+          cat > app/src/main/res/values/themes.xml << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="Theme.AppCompat.NoActionBar" parent="Theme.AppCompat.DayNight.NoActionBar" />
+          </resources>
           EOF
 
           cat > app/src/main/AndroidManifest.xml << 'EOF'
@@ -126,6 +134,10 @@ jobs:
                       </intent-filter>
                   </activity>
 
+                  <activity
+                      android:name=".HearingTestActivity"
+                      android:exported="false" />
+
                   <service
                       android:name=".KeepAliveService"
                       android:enabled="true"
@@ -140,8 +152,10 @@ jobs:
 
           import android.content.Context
           import android.media.*
-          import android.os.Build
+          import android.os.Process
           import kotlin.math.*
+
+          fun Context.dpi(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
           class Biquad {
               private var b0 = 1.0; private var b1 = 0.0; private var b2 = 0.0
@@ -155,103 +169,169 @@ jobs:
                   return y
               }
 
-              fun setHighPass(freq: Double, sr: Double) {
-                  val w0 = 2.0 * PI * freq / sr
-                  val cosw = cos(w0)
-                  val alpha = sin(w0) / 1.414
-                  val a0 = 1.0 + alpha
-                  b0 = ((1.0 + cosw) / 2.0) / a0
-                  b1 = -(1.0 + cosw) / a0
-                  b2 = ((1.0 + cosw) / 2.0) / a0
-                  a1 = (-2.0 * cosw) / a0
-                  a2 = (1.0 - alpha) / a0
+              fun highPass(f: Double, sr: Double, q: Double = 0.707) {
+                  val w = 2 * PI * f / sr
+                  val c = cos(w)
+                  val al = sin(w) / (2 * q)
+                  val a0 = 1 + al
+                  b0 = (1 + c) / 2 / a0
+                  b1 = -(1 + c) / a0
+                  b2 = (1 + c) / 2 / a0
+                  a1 = -2 * c / a0
+                  a2 = (1 - al) / a0
               }
 
-              fun setPeaking(freq: Double, sr: Double, q: Double, gainDb: Double) {
-                  val a = 10.0.pow(gainDb / 40.0)
-                  val w0 = 2.0 * PI * freq / sr
-                  val cosw = cos(w0)
-                  val alpha = sin(w0) / (2.0 * q)
-                  val a0 = 1.0 + alpha / a
-                  b0 = (1.0 + alpha * a) / a0
-                  b1 = (-2.0 * cosw) / a0
-                  b2 = (1.0 - alpha * a) / a0
-                  a1 = (-2.0 * cosw) / a0
-                  a2 = (1.0 - alpha / a) / a0
+              fun peaking(f: Double, sr: Double, q: Double, dB: Double) {
+                  val a = 10.0.pow(dB / 40)
+                  val w = 2 * PI * f / sr
+                  val c = cos(w)
+                  val al = sin(w) / (2 * q)
+                  val a0 = 1 + al / a
+                  b0 = (1 + al * a) / a0
+                  b1 = -2 * c / a0
+                  b2 = (1 - al * a) / a0
+                  a1 = -2 * c / a0
+                  a2 = (1 - al / a) / a0
+              }
+          }
+
+          object Fft {
+              fun magnitudes(input: DoubleArray, out: DoubleArray) {
+                  val n = input.size
+                  val re = input.copyOf()
+                  val im = DoubleArray(n)
+                  var j = 0
+                  for (i in 1 until n) {
+                      var bit = n shr 1
+                      while ((j and bit) != 0) { j = j xor bit; bit = bit shr 1 }
+                      j = j xor bit
+                      if (i < j) {
+                          val t = re[i]; re[i] = re[j]; re[j] = t
+                      }
+                  }
+                  var len = 2
+                  while (len <= n) {
+                      val half = len / 2
+                      val ang = -2 * PI / len
+                      val wr = cos(ang)
+                      val wi = sin(ang)
+                      var i = 0
+                      while (i < n) {
+                          var cr = 1.0
+                          var ci = 0.0
+                          for (k in 0 until half) {
+                              val p = i + k
+                              val q = p + half
+                              val vr = re[q] * cr - im[q] * ci
+                              val vi = re[q] * ci + im[q] * cr
+                              re[q] = re[p] - vr; im[q] = im[p] - vi
+                              re[p] = re[p] + vr; im[p] = im[p] + vi
+                              val nr = cr * wr - ci * wi
+                              ci = cr * wi + ci * wr
+                              cr = nr
+                          }
+                          i += len
+                      }
+                      len = len shl 1
+                  }
+                  for (k in 0 until n / 2) out[k] = sqrt(re[k] * re[k] + im[k] * im[k])
+              }
+          }
+
+          private class Chain {
+              private val hp = Biquad()
+              private val mud = Biquad()
+              private val bands = Array(5) { Biquad() }
+              private var env = 0.0
+              private var g = 1.0
+
+              fun setup(hpHz: Double, gainsDb: DoubleArray, sr: Double) {
+                  hp.highPass(hpHz, sr)
+                  mud.peaking(320.0, sr, 1.1, -5.0)
+                  for (i in bands.indices) bands[i].peaking(AudioEngine.BAND_HZ[i], sr, 1.0, gainsDb[i])
+              }
+
+              fun process(x: Double, thr: Double, master: Double): Double {
+                  val ax = abs(x)
+                  env = if (ax > env) 0.93 * env + 0.07 * ax else 0.9993 * env + 0.0007 * ax
+                  val comp = if (env > 0.25) (0.25 + (env - 0.25) / 3.0) / env else 1.0
+                  val target = if (thr > 0 && env < thr) 0.12 else (if (env < 0.05) 1.35 else 1.0) * comp
+                  g = 0.985 * g + 0.015 * target
+                  var y = mud.process(hp.process(x))
+                  for (b in bands) y = b.process(y)
+                  y *= g * master
+                  val ay = abs(y)
+                  if (ay > 0.65) y = sign(y) * (0.65 + 0.35 * tanh((ay - 0.65) / 0.35))
+                  return y
               }
           }
 
           object AudioEngine {
-              const val SAMPLE_RATE = 48000
+              const val SR = 48000
+              private const val FFT_N = 1024
+              private const val HOP = 512
+              val BAND_HZ = doubleArrayOf(500.0, 1000.0, 2000.0, 4000.0, 6000.0)
 
               @Volatile var isRunning = false
               @Volatile var isReplaying = false
               @Volatile var replayRequested = false
               @Volatile var currentLevel = 0
+              @Volatile var feedbackHz = 0
               @Volatile var gain = 3.5
-              @Volatile var clarityDb = 11.0
+              @Volatile var balance = 0.0
               @Volatile var gateThresh = 0.005
               @Volatile var highPassHz = 180.0
-              @Volatile var pan = 0.0
+              @Volatile var feedbackGuard = true
+              @Volatile var gainsLeft = DoubleArray(5)
+              @Volatile var gainsRight = DoubleArray(5)
               @Volatile var filtersDirty = true
 
-              private var audioThread: Thread? = null
-              private val ring = ShortArray(SAMPLE_RATE * 8)
-              @Volatile private var ringWritePos = 0
+              private var thread: Thread? = null
+              private val ring = ShortArray(SR * 8)
+              @Volatile private var ringPos = 0
 
-              fun start(context: Context) {
+              fun start(ctx: Context) {
                   if (isRunning) return
                   isRunning = true
                   replayRequested = false
-                  val appCtx = context.applicationContext
-                  audioThread = Thread({ runLoop(appCtx) }, "HearingAudio").also { it.start() }
+                  val app = ctx.applicationContext
+                  thread = Thread({ runLoop(app) }, "HearingAudio").also { it.start() }
               }
 
               fun stop() {
                   isRunning = false
-                  try { audioThread?.join(500) } catch (e: InterruptedException) {}
-                  audioThread = null
-                  replayRequested = false
+                  try { thread?.join(800) } catch (e: InterruptedException) {}
+                  thread = null
                   isReplaying = false
+                  replayRequested = false
                   currentLevel = 0
+                  feedbackHz = 0
               }
 
               fun requestReplay() {
                   if (isRunning) replayRequested = true
               }
 
-              private fun runLoop(context: Context) {
-                  android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
+              private fun runLoop(ctx: Context) {
+                  Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
 
-                  val inMin = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-                  val outMin = AudioTrack.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_16BIT)
+                  val inMin = AudioRecord.getMinBufferSize(SR, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+                  val outMin = AudioTrack.getMinBufferSize(SR, AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_16BIT)
                   if (inMin <= 0 || outMin <= 0) { isRunning = false; return }
 
-                  val recorder = try {
+                  val rec = try {
                       AudioRecord(
-                          MediaRecorder.AudioSource.VOICE_RECOGNITION, SAMPLE_RATE,
+                          MediaRecorder.AudioSource.VOICE_RECOGNITION, SR,
                           AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, inMin * 2
                       )
-                  } catch (e: Exception) {
-                      isRunning = false
-                      return
-                  }
-                  if (recorder.state != AudioRecord.STATE_INITIALIZED) {
-                      recorder.release()
+                  } catch (e: Exception) { isRunning = false; return }
+                  if (rec.state != AudioRecord.STATE_INITIALIZED) {
+                      rec.release()
                       isRunning = false
                       return
                   }
 
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                      try {
-                          val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-                          am.getDevices(AudioManager.GET_DEVICES_INPUTS)
-                              .firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_MIC }
-                              ?.let { recorder.setPreferredDevice(it) }
-                      } catch (e: Exception) {}
-                  }
-
-                  val player = AudioTrack.Builder()
+                  val track = AudioTrack.Builder()
                       .setAudioAttributes(
                           AudioAttributes.Builder()
                               .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -261,7 +341,7 @@ jobs:
                       .setAudioFormat(
                           AudioFormat.Builder()
                               .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                              .setSampleRate(SAMPLE_RATE)
+                              .setSampleRate(SR)
                               .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
                               .build()
                       )
@@ -269,29 +349,71 @@ jobs:
                       .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
                       .build()
 
-                  val hp = Biquad()
-                  val mud = Biquad()
-                  val mid = Biquad()
-                  val treb = Biquad()
+                  val left = Chain()
+                  val right = Chain()
+                  val fb = Biquad()
+                  val fbAn = DoubleArray(FFT_N)
+                  var anPos = 0
+                  var sinceHop = 0
+                  val win = DoubleArray(FFT_N) { 0.5 - 0.5 * cos(2 * PI * it / (FFT_N - 1)) }
+                  val frame = DoubleArray(FFT_N)
+                  val mags = DoubleArray(FFT_N / 2)
+                  var howlCount = 0
+                  var fbCutHz = 0.0
+                  var fbLastSeen = 0L
                   val inBuf = ShortArray(256)
                   val outBuf = ShortArray(512)
-                  var env = 0.0
-                  var gGain = 1.0
                   var replayPos = 0
                   var replayLeft = 0
 
+                  fun analyzeFeedback(now: Long) {
+                      for (i in 0 until FFT_N) frame[i] = fbAn[(anPos + i) % FFT_N] * win[i]
+                      Fft.magnitudes(frame, mags)
+                      val binHz = SR.toDouble() / FFT_N
+                      val lo = (1200 / binHz).toInt()
+                      val hi = min(mags.size - 2, (7000 / binHz).toInt())
+                      var peak = lo
+                      var sum = 0.0
+                      for (k in lo..hi) {
+                          sum += mags[k]
+                          if (mags[k] > mags[peak]) peak = k
+                      }
+                      val avg = sum / (hi - lo + 1)
+                      val howl = feedbackGuard && mags[peak] > 2.0 && mags[peak] > avg * 12
+                      howlCount = if (howl) howlCount + 1 else 0
+
+                      if (howlCount >= 3) {
+                          val hz = peak * binHz
+                          if (abs(hz - fbCutHz) > 40) {
+                              fbCutHz = hz
+                              fb.peaking(hz, SR.toDouble(), 6.0, -18.0)
+                              feedbackHz = hz.roundToInt()
+                          }
+                          fbLastSeen = now
+                      }
+                      if (fbCutHz > 0 && now - fbLastSeen > 4000) {
+                          fbCutHz = 0.0
+                          feedbackHz = 0
+                          fb.peaking(1000.0, SR.toDouble(), 1.0, 0.0)
+                      }
+                  }
+
                   try {
-                      recorder.startRecording()
-                      player.play()
+                      rec.startRecording()
+                      track.play()
 
                       while (isRunning) {
                           if (filtersDirty) {
-                              val sr = SAMPLE_RATE.toDouble()
-                              hp.setHighPass(highPassHz, sr)
-                              mud.setPeaking(320.0, sr, 1.1, -5.0)
-                              mid.setPeaking(2400.0, sr, 0.9, clarityDb * 0.9)
-                              treb.setPeaking(4500.0, sr, 0.85, clarityDb * 1.15)
                               filtersDirty = false
+                              val sr = SR.toDouble()
+                              left.setup(highPassHz, gainsLeft, sr)
+                              right.setup(highPassHz, gainsRight, sr)
+                              if (!feedbackGuard) {
+                                  fb.peaking(1000.0, sr, 1.0, 0.0)
+                                  fbCutHz = 0.0
+                                  feedbackHz = 0
+                                  howlCount = 0
+                              }
                           }
 
                           if (replayRequested) {
@@ -299,60 +421,65 @@ jobs:
                               if (isReplaying) {
                                   isReplaying = false
                               } else {
-                                  replayPos = ringWritePos
+                                  replayPos = ringPos
                                   replayLeft = ring.size
                                   isReplaying = true
                               }
                           }
 
-                          val read = recorder.read(inBuf, 0, inBuf.size)
+                          val read = rec.read(inBuf, 0, inBuf.size)
                           if (read <= 0) continue
 
-                          val lG = if (pan <= 0.0) 1.0 else 1.0 - pan
-                          val rG = if (pan >= 0.0) 1.0 else 1.0 + pan
-                          val g = gain
                           val thr = gateThresh
+                          val mg = gain
+                          val bal = balance
+                          val lG = if (bal <= 0) 1.0 else 1.0 - bal
+                          val rG = if (bal >= 0) 1.0 else 1.0 + bal
                           var peak = 0.0
 
                           for (i in 0 until read) {
-                              val outS: Short
+                              val outL: Double
+                              val outR: Double
                               if (isReplaying) {
-                                  outS = ring[replayPos]
+                                  val s = ring[replayPos].toDouble() / 32768.0 * 0.9
                                   replayPos = (replayPos + 1) % ring.size
                                   replayLeft--
                                   if (replayLeft <= 0) isReplaying = false
+                                  outL = s
+                                  outR = s
                               } else {
-                                  var x = inBuf[i] / 32768.0
-                                  val ax = abs(x)
-                                  env = if (ax > env) 0.93 * env + 0.07 * ax else 0.9993 * env + 0.0007 * ax
-                                  val target = if (thr > 0.0 && env < thr) 0.12 else if (env < 0.05) 1.35 else 1.0
-                                  gGain = 0.985 * gGain + 0.015 * target
-
-                                  x = treb.process(mid.process(mud.process(hp.process(x))))
-                                  var y = x * gGain * g
-                                  val ay = abs(y)
-                                  if (ay > 0.65) y = sign(y) * (0.65 + 0.35 * tanh((ay - 0.65) / 0.35))
-                                  if (ay > peak) peak = ay
-
-                                  outS = (y * 32767.0).coerceIn(-32768.0, 32767.0).toInt().toShort()
-                                  ring[ringWritePos] = outS
-                                  ringWritePos = (ringWritePos + 1) % ring.size
+                                  val raw = inBuf[i] / 32768.0
+                                  fbAn[anPos] = raw
+                                  anPos = (anPos + 1) % FFT_N
+                                  sinceHop++
+                                  if (sinceHop >= HOP) {
+                                      sinceHop = 0
+                                      analyzeFeedback(System.currentTimeMillis())
+                                  }
+                                  val x = fb.process(raw)
+                                  outL = left.process(x, thr, mg * lG)
+                                  outR = right.process(x, thr, mg * rG)
+                                  val mid = (outL + outR) / 2
+                                  ring[ringPos] = (mid * 32767).coerceIn(-32768.0, 32767.0).toInt().toShort()
+                                  ringPos = (ringPos + 1) % ring.size
+                                  peak = max(peak, max(abs(outL), abs(outR)))
                               }
-                              outBuf[i * 2] = (outS * lG).coerceIn(-32768.0, 32767.0).toInt().toShort()
-                              outBuf[i * 2 + 1] = (outS * rG).coerceIn(-32768.0, 32767.0).toInt().toShort()
+                              outBuf[i * 2] = (outL * 32767).coerceIn(-32768.0, 32767.0).toInt().toShort()
+                              outBuf[i * 2 + 1] = (outR * 32767).coerceIn(-32768.0, 32767.0).toInt().toShort()
                           }
 
-                          currentLevel = (peak * 100.0).toInt().coerceIn(0, 100)
-                          player.write(outBuf, 0, read * 2)
+                          currentLevel = (peak * 100).toInt().coerceIn(0, 100)
+                          track.write(outBuf, 0, read * 2)
                       }
                   } finally {
                       isRunning = false
                       isReplaying = false
                       currentLevel = 0
-                      try { recorder.stop() } catch (e: Exception) {}
-                      recorder.release()
-                      try { player.stop() } catch (e: Exception) {}
-                      player.release()
+                      feedbackHz = 0
+                      try { rec.stop() } catch (e: Exception) {}
+                      rec.release()
+                      try { track.stop() } catch (e: Exception) {}
+                      track.release()
                   }
               }
           }
@@ -417,10 +544,231 @@ jobs:
           }
           EOF
 
+          cat > app/src/main/java/com/resul/isitme/HearingTestActivity.kt << 'EOF'
+          package com.resul.isitme
+
+          import android.graphics.Color
+          import android.graphics.drawable.GradientDrawable
+          import android.media.*
+          import android.os.Bundle
+          import android.view.Gravity
+          import android.view.View
+          import android.view.ViewGroup
+          import android.widget.*
+          import android.widget.Toast
+          import androidx.appcompat.app.AppCompatActivity
+          import kotlin.math.*
+
+          class SineTone {
+              @Volatile var freq = 1000.0
+              @Volatile var amp = 0.0
+              @Volatile var ear = 0
+              @Volatile private var running = false
+              private var thread: Thread? = null
+
+              fun start() {
+                  if (running) return
+                  running = true
+                  thread = Thread({
+                      val n = 960
+                      val track = AudioTrack.Builder()
+                          .setAudioAttributes(
+                              AudioAttributes.Builder()
+                                  .setUsage(AudioAttributes.USAGE_MEDIA)
+                                  .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                                  .build()
+                          )
+                          .setAudioFormat(
+                              AudioFormat.Builder()
+                                  .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                                  .setSampleRate(AudioEngine.SR)
+                                  .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
+                                  .build()
+                          )
+                          .setBufferSizeInBytes(n * 4 * 4)
+                          .build()
+                      track.play()
+                      val buf = ShortArray(n * 2)
+                      var phase = 0.0
+                      var t = 0L
+                      while (running) {
+                          val f = freq
+                          val a = amp
+                          val e = ear
+                          val on = (t / 24000L) % 2L == 0L
+                          for (i in 0 until n) {
+                              val s = if (on) a * sin(phase) else 0.0
+                              phase += 2 * PI * f / AudioEngine.SR
+                              if (phase > 2 * PI) phase -= 2 * PI
+                              val v = (s * 32767).toInt().toShort()
+                              buf[i * 2] = if (e == 0) v else 0.toShort()
+                              buf[i * 2 + 1] = if (e == 1) v else 0.toShort()
+                          }
+                          t += n
+                          track.write(buf, 0, n * 2)
+                      }
+                      try { track.stop() } catch (ex: Exception) {}
+                      track.release()
+                  }, "SineTone").also { it.start() }
+              }
+
+              fun stop() {
+                  running = false
+                  try { thread?.join(800) } catch (e: InterruptedException) {}
+                  thread = null
+              }
+          }
+
+          class HearingTestActivity : AppCompatActivity() {
+              companion object {
+                  const val PREFS = "hearing"
+                  val FREQS = intArrayOf(500, 1000, 2000, 4000, 6000)
+                  const val START_DB = -60.0
+                  const val MAX_DB = -10.0
+                  const val STEP_DB = 5.0
+                  const val REF_DBFS_0HL = -60.0
+                  const val NO_RESPONSE_HL = 100f
+              }
+
+              private val tone = SineTone()
+              private var started = false
+              private var ear = 0
+              private var fi = 0
+              private var db = START_DB
+              private val results = Array(2) { FloatArray(FREQS.size) }
+
+              private lateinit var tvInfo: TextView
+              private lateinit var tvFreq: TextView
+              private lateinit var tvDb: TextView
+              private lateinit var btnStart: Button
+              private lateinit var btnHeard: Button
+              private lateinit var btnNot: Button
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  val col = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      gravity = Gravity.CENTER_HORIZONTAL
+                      setBackgroundColor(Color.parseColor("#0B0D11"))
+                      setPadding(dpi(24), dpi(32), dpi(24), dpi(24))
+                  }
+                  col.addView(tv(20f, "#00E676").apply { text = "🩺 Odyogram Testi" })
+                  col.addView(tv(13f, "#CFD4DC").apply {
+                      text = "Kulaklığınızı takın, ses seviyesini düşük tutun. Ton önce sol, sonra sağ kulağa gelir. " +
+                          "Tonu duyduğunuz anda 'Duyuyorum'a basın. Duymazsanız ses adım adım artar."
+                  })
+                  tvInfo = tv(13f, "#FFB74D")
+                  tvFreq = tv(28f, "#FFFFFF")
+                  tvDb = tv(13f, "#CFD4DC")
+                  col.addView(tvInfo)
+                  col.addView(tvFreq)
+                  col.addView(tvDb)
+
+                  btnStart = button("▶ Teste Başla", "#00E676", "#000000") { begin() }
+                  btnHeard = button("✅ Duyuyorum", "#00E676", "#000000") { onHeard() }
+                  btnNot = button("🔊 Duymuyorum (+5 dB)", "#2B313F", "#FFFFFF") { onNotHeard() }
+                  val btnCancel = button("İptal", "#181C24", "#999999") { finish() }
+                  btnHeard.visibility = View.GONE
+                  btnNot.visibility = View.GONE
+
+                  col.addView(btnStart); col.addView(btnHeard); col.addView(btnNot); col.addView(btnCancel)
+
+                  setContentView(ScrollView(this).apply {
+                      setBackgroundColor(Color.parseColor("#0B0D11"))
+                      addView(col)
+                  })
+                  tvInfo.text = "Hazır"
+                  tvFreq.text = ""
+                  tvDb.text = ""
+              }
+
+              override fun onDestroy() {
+                  tone.stop()
+                  super.onDestroy()
+              }
+
+              private fun tv(size: Float, color: String) = TextView(this).apply {
+                  textSize = size
+                  setTextColor(Color.parseColor(color))
+                  gravity = Gravity.CENTER
+                  setPadding(0, dpi(8), 0, dpi(8))
+              }
+
+              private fun button(text: String, bg: String, fg: String, onClick: () -> Unit): Button =
+                  Button(this).apply {
+                      this.text = text
+                      isAllCaps = false
+                      setTextColor(Color.parseColor(fg))
+                      background = GradientDrawable().apply {
+                          setColor(Color.parseColor(bg))
+                          cornerRadius = dpi(14).toFloat()
+                      }
+                      layoutParams = LinearLayout.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                      ).apply { topMargin = dpi(12) }
+                      setOnClickListener { onClick() }
+                  }
+
+              private fun begin() {
+                  Toast.makeText(this, "Kulaklık takılı olduğundan emin olun", Toast.LENGTH_LONG).show()
+                  ear = 0; fi = 0; db = START_DB
+                  btnStart.visibility = View.GONE
+                  btnHeard.visibility = View.VISIBLE
+                  btnNot.visibility = View.VISIBLE
+                  if (!started) { tone.start(); started = true }
+                  refresh()
+              }
+
+              private fun refresh() {
+                  tone.ear = ear
+                  tone.freq = FREQS[fi].toDouble()
+                  tone.amp = 10.0.pow(db / 20.0)
+                  tvInfo.text = "${if (ear == 0) "SOL" else "SAĞ"} kulak · Adım ${fi + 1}/${FREQS.size}"
+                  tvFreq.text = "${FREQS[fi]} Hz"
+                  tvDb.text = "Seviye: ${db.toInt()} dBFS"
+              }
+
+              private fun onHeard() = record((db - REF_DBFS_0HL).toFloat().coerceAtLeast(0f))
+
+              private fun onNotHeard() {
+                  if (db + STEP_DB > MAX_DB) {
+                      record(NO_RESPONSE_HL)
+                      return
+                  }
+                  db += STEP_DB
+                  refresh()
+              }
+
+              private fun record(hl: Float) {
+                  results[ear][fi] = hl
+                  fi++
+                  db = START_DB
+                  if (fi >= FREQS.size) {
+                      fi = 0
+                      ear++
+                      if (ear >= 2) { complete(); return }
+                  }
+                  refresh()
+              }
+
+              private fun complete() {
+                  tone.stop()
+                  val edit = getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                  listOf("L", "R").forEachIndexed { e, side ->
+                      FREQS.forEachIndexed { i, f -> edit.putFloat("${side}_$f", results[e][i]) }
+                  }
+                  edit.putBoolean("has_profile", true).apply()
+                  Toast.makeText(this, "Test kaydedildi", Toast.LENGTH_SHORT).show()
+                  finish()
+              }
+          }
+          EOF
+
           cat > app/src/main/java/com/resul/isitme/MainActivity.kt << 'EOF'
           package com.resul.isitme
 
           import android.Manifest
+          import android.content.Context
           import android.content.Intent
           import android.content.pm.PackageManager
           import android.graphics.Color
@@ -436,40 +784,51 @@ jobs:
           import androidx.activity.result.contract.ActivityResultContracts
           import androidx.appcompat.app.AppCompatActivity
           import androidx.core.content.ContextCompat
-          import kotlin.math.roundToInt
 
-          private data class Preset(val gain: Double, val clarity: Int, val gate: Int, val hz: Int)
+          private class Preset(val gainP: Int, val clarity: Int, val gate: Int, val hz: Int)
 
-          private val PRESETS = linkedMapOf(
-              "💎 Kristal Netlik" to Preset(3.5, 11, 10, 180),
-              "👥 Gürültülü Ortam" to Preset(3.0, 13, 18, 280),
-              "🌿 Doğal & TV" to Preset(3.0, 5, 6, 100),
-              "👂 Uzak / Fısıltı" to Preset(7.5, 15, 8, 200)
-          )
+          private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
+          private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
 
           class MainActivity : AppCompatActivity() {
 
+              private val settings by lazy { getSharedPreferences("settings", Context.MODE_PRIVATE) }
+              private val hearing by lazy { getSharedPreferences(HearingTestActivity.PREFS, Context.MODE_PRIVATE) }
               private val ui = Handler(Looper.getMainLooper())
               private var lastTap = 0L
               private var lastOn: Boolean? = null
               private var lastRep = false
+              private var lastHz = -1
+              private var personal = false
+              private var guardOn = true
 
               private lateinit var btnMain: Button
               private lateinit var btnReplay: Button
+              private lateinit var btnPersonal: Button
+              private lateinit var btnGuard: Button
+              private lateinit var btnTest: Button
               private lateinit var meter: ProgressBar
-              private lateinit var statusTv: TextView
+              private lateinit var status: TextView
               private lateinit var blackout: FrameLayout
-              private lateinit var seekGain: SeekBar
-              private lateinit var seekClarity: SeekBar
-              private lateinit var seekGate: SeekBar
-              private lateinit var seekBass: SeekBar
-              private val presetBtns = mutableMapOf<String, Button>()
+              private lateinit var gainSeek: SeekBar
+              private lateinit var claritySeek: SeekBar
+              private lateinit var gateSeek: SeekBar
+              private lateinit var bassSeek: SeekBar
+              private lateinit var balanceSeek: SeekBar
+              private val presetBtns = LinkedHashMap<String, Button>()
+
+              private val presets = linkedMapOf(
+                  "💎 Kristal Netlik" to Preset(25, 11, 10, 180),
+                  "👥 Gürültülü Ortam" to Preset(20, 13, 18, 280),
+                  "🌿 Doğal & TV" to Preset(20, 5, 6, 100),
+                  "👂 Uzak / Fısıltı" to Preset(65, 15, 8, 200)
+              )
 
               private val permLauncher = registerForActivityResult(
                   ActivityResultContracts.RequestMultiplePermissions()
-              ) { result ->
-                  if (result[Manifest.permission.RECORD_AUDIO] == true) startEngineService()
-                  else statusTv.text = "Mikrofon izni verilmedi"
+              ) { r ->
+                  if (r[Manifest.permission.RECORD_AUDIO] == true) startEngineService()
+                  else status.text = "Mikrofon izni verilmedi"
               }
 
               private val tick = object : Runnable {
@@ -480,5 +839,292 @@ jobs:
                           btnMain.text = if (on) "Durdur" else "Başlat"
                           paint(btnMain, if (on) "#FF5252" else "#00E676", if (on) "#FFFFFF" else "#000000")
                           btnReplay.isEnabled = on
-                          statusTv.text = if (on) "Dinleniyor" else "Durduruldu"
-          
+                          status.text = if (on) "Dinleniyor" else "Durduruldu"
+                          lastHz = -1
+                      }
+                      if (on) {
+                          val hz = AudioEngine.feedbackHz
+                          if (hz != lastHz) {
+                              lastHz = hz
+                              status.text = if (hz > 0) "🛡️ Çınlama bastırıldı: $hz Hz" else "Dinleniyor"
+                          }
+                      }
+                      val rep = AudioEngine.isReplaying
+                      if (rep != lastRep) {
+                          lastRep = rep
+                          btnReplay.text = if (rep) "⏹ Durdur" else "⏪ Son 8 Sn"
+                      }
+                      meter.progress = AudioEngine.currentLevel
+                      ui.postDelayed(this, 80)
+                  }
+              }
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+
+                  val root = FrameLayout(this).apply { setBackgroundColor(Color.parseColor("#0B0D11")) }
+                  val scroll = ScrollView(this)
+                  val card = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      setPadding(dpi(20), dpi(24), dpi(20), dpi(24))
+                  }
+                  scroll.addView(card)
+                  root.addView(scroll, FrameLayout.LayoutParams(MATCH, MATCH))
+
+                  blackout = FrameLayout(this).apply {
+                      setBackgroundColor(Color.BLACK)
+                      visibility = View.GONE
+                      addView(
+                          TextView(this@MainActivity).apply {
+                              text = "🌙 Cep Modu\n\nEkranı açmak için iki kez dokunun"
+                              setTextColor(Color.DKGRAY)
+                              gravity = Gravity.CENTER
+                              textSize = 14f
+                          },
+                          FrameLayout.LayoutParams(MATCH, MATCH)
+                      )
+                      setOnClickListener {
+                          val now = System.currentTimeMillis()
+                          if (now - lastTap < 350) visibility = View.GONE
+                          lastTap = now
+                      }
+                  }
+                  root.addView(blackout, FrameLayout.LayoutParams(MATCH, MATCH))
+
+                  card.addView(label("HD Klinik İşitme Cihazı", 22f, "#00E676"))
+                  card.addView(label("Kişisel odyogram & çınlama korumalı ses", 13f, "#CFD4DC").apply {
+                      setPadding(0, dpi(6), 0, dpi(12))
+                  })
+
+                  card.addView(button("🌙 Cep Modu (Ekranı Karart)", "#1F242F", "#FFFFFF") {
+                      blackout.visibility = View.VISIBLE
+                  })
+
+                  presets.forEach { (name, p) ->
+                      presetBtns[name] = button(name, "#232834", "#FFFFFF") { applyPreset(name, p) }
+                  }
+                  val keys = presets.keys.toList()
+                  card.addView(row(presetBtns.getValue(keys[0]), presetBtns.getValue(keys[1])))
+                  card.addView(row(presetBtns.getValue(keys[2]), presetBtns.getValue(keys[3])))
+
+                  btnTest = button("🩺 Odyogram Testi", "#1F242F", "#FFFFFF") { openTest() }
+                  btnPersonal = button("", "#232834", "#FFFFFF") {
+                      personal = !personal
+                      pushSettings()
+                  }
+                  btnGuard = button("", "#232834", "#FFFFFF") {
+                      guardOn = !guardOn
+                      pushSettings()
+                  }
+                  card.addView(btnTest)
+                  card.addView(row(btnPersonal, btnGuard))
+
+                  gainSeek = addSlider(card, "Genel ses gücü", 110, 25, { "%.1fx".format((it + 10) / 10.0) }) { pushSettings() }
+                  claritySeek = addSlider(card, "Konuşma & tiz berraklığı", 18, 11, { "+$it dB" }) { pushSettings() }
+                  gateSeek = addSlider(card, "Tıslama kesici (noise gate)", 30, 10, { "Seviye $it" }) { pushSettings() }
+                  bassSeek = addSlider(card, "Dip uğultu kesme", 270, 100, { "${it + 80} Hz" }) { pushSettings() }
+                  balanceSeek = addSlider(card, "Denge", 20, 10, { p ->
+                      val v = (p - 10) * 10
+                      if (v == 0) "Merkez" else if (v < 0) "Sol %${-v}" else "Sağ %$v"
+                  }) { pushSettings() }
+
+                  btnMain = button("Başlat", "#00E676", "#000000") {
+                      if (AudioEngine.isRunning) stopEngineService() else requestPermsAndStart()
+                  }
+                  btnReplay = button("⏪ Son 8 Sn", "#232834", "#FFFFFF") { AudioEngine.requestReplay() }
+                  btnReplay.isEnabled = false
+                  card.addView(row(btnMain, btnReplay))
+
+                  meter = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply { max = 100 }
+                  card.addView(meter, LinearLayout.LayoutParams(MATCH, dpi(8)).apply { topMargin = dpi(16) })
+
+                  status = label("Hazır", 12f, "#8B929E").apply { setPadding(0, dpi(10), 0, 0) }
+                  card.addView(status)
+
+                  setContentView(root)
+                  loadSettings()
+                  pushSettings()
+                  ui.post(tick)
+              }
+
+              override fun onResume() {
+                  super.onResume()
+                  refreshPersonalButton()
+              }
+
+              override fun onDestroy() {
+                  ui.removeCallbacks(tick)
+                  super.onDestroy()
+              }
+
+              private fun openTest() {
+                  if (AudioEngine.isRunning) stopEngineService()
+                  startActivity(Intent(this, HearingTestActivity::class.java))
+              }
+
+              private fun hasProfile() = hearing.getBoolean("has_profile", false)
+
+              private fun refreshPersonalButton() {
+                  val has = hasProfile()
+                  if (!has) personal = false
+                  btnPersonal.isEnabled = has
+                  btnPersonal.text = if (personal) "🩺 Kişisel: Açık" else "🩺 Kişisel: Kapalı"
+                  btnGuard.text = if (guardOn) "🛡️ Çınlama: Açık" else "🛡️ Çınlama: Kapalı"
+                  paint(btnPersonal, if (personal) "#00E676" else "#232834", if (personal) "#000000" else "#FFFFFF")
+              }
+
+              private fun clarityDb(): Double = claritySeek.progress.toDouble()
+
+              private fun gainsFor(side: String): DoubleArray {
+                  if (personal && hasProfile()) {
+                      return DoubleArray(HearingTestActivity.FREQS.size) { i ->
+                          val hl = hearing.getFloat("${side}_${HearingTestActivity.FREQS[i]}", 0f).toDouble()
+                          (hl * 0.5).coerceIn(0.0, 25.0)
+                      }
+                  }
+                  val c = clarityDb()
+                  return doubleArrayOf(0.0, c * 0.4, c * 0.85, c * 1.1, c * 0.9)
+              }
+
+              private fun pushSettings() {
+                  refreshPersonalButton()
+                  AudioEngine.gain = (gainSeek.progress + 10) / 10.0
+                  AudioEngine.gateThresh = gateSeek.progress * 0.0005
+                  AudioEngine.highPassHz = (bassSeek.progress + 80).toDouble()
+                  AudioEngine.balance = (balanceSeek.progress - 10) / 10.0
+                  AudioEngine.feedbackGuard = guardOn
+                  AudioEngine.gainsLeft = gainsFor("L")
+                  AudioEngine.gainsRight = gainsFor("R")
+                  AudioEngine.filtersDirty = true
+                  settings.edit()
+                      .putInt("gain", gainSeek.progress)
+                      .putInt("clarity", claritySeek.progress)
+                      .putInt("gate", gateSeek.progress)
+                      .putInt("bass", bassSeek.progress)
+                      .putInt("balance", balanceSeek.progress)
+                      .putBoolean("guard", guardOn)
+                      .putBoolean("personal", personal)
+                      .apply()
+              }
+
+              private fun loadSettings() {
+                  gainSeek.progress = settings.getInt("gain", 25)
+                  claritySeek.progress = settings.getInt("clarity", 11)
+                  gateSeek.progress = settings.getInt("gate", 10)
+                  bassSeek.progress = settings.getInt("bass", 100)
+                  balanceSeek.progress = settings.getInt("balance", 10)
+                  guardOn = settings.getBoolean("guard", true)
+                  personal = settings.getBoolean("personal", false)
+                  refreshPersonalButton()
+              }
+
+              private fun applyPreset(name: String, p: Preset) {
+                  gainSeek.progress = p.gainP
+                  claritySeek.progress = p.clarity
+                  gateSeek.progress = p.gate
+                  bassSeek.progress = p.hz - 80
+                  presetBtns.forEach { (k, b) ->
+                      if (k == name) paint(b, "#00E676", "#000000") else paint(b, "#232834", "#FFFFFF")
+                  }
+                  status.text = "$name modu seçildi"
+                  pushSettings()
+              }
+
+              private fun paint(b: Button, bg: String, fg: String) {
+                  b.setTextColor(Color.parseColor(fg))
+                  b.background = GradientDrawable().apply {
+                      setColor(Color.parseColor(bg))
+                      cornerRadius = dpi(14).toFloat()
+                  }
+              }
+
+              private fun label(t: String, size: Float, color: String) = TextView(this).apply {
+                  text = t
+                  textSize = size
+                  setTextColor(Color.parseColor(color))
+                  gravity = Gravity.CENTER
+              }
+
+              private fun button(text: String, bg: String, fg: String, onClick: () -> Unit): Button =
+                  Button(this).apply {
+                      this.text = text
+                      isAllCaps = false
+                      paint(this, bg, fg)
+                      layoutParams = LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dpi(10) }
+                      setOnClickListener { onClick() }
+                  }
+
+              private fun row(vararg views: View): LinearLayout = LinearLayout(this).apply {
+                  orientation = LinearLayout.HORIZONTAL
+                  views.forEachIndexed { i, v ->
+                      addView(v, LinearLayout.LayoutParams(0, WRAP, 1f).apply {
+                          if (i > 0) leftMargin = dpi(8)
+                          topMargin = dpi(10)
+                      })
+                  }
+              }
+
+              private fun addSlider(
+                  parent: LinearLayout,
+                  name: String,
+                  max: Int,
+                  initial: Int,
+                  fmt: (Int) -> String,
+                  onChange: () -> Unit
+              ): SeekBar {
+                  val tv = TextView(this).apply {
+                      textSize = 13f
+                      setTextColor(Color.parseColor("#CFD4DC"))
+                      setPadding(0, dpi(14), 0, dpi(4))
+                      text = "$name: ${fmt(initial)}"
+                  }
+                  val sb = SeekBar(this).apply {
+                      this.max = max
+                      progress = initial
+                  }
+                  sb.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                      override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) {
+                          tv.text = "$name: ${fmt(p)}"
+                          if (fromUser) onChange()
+                      }
+                      override fun onStartTrackingTouch(s: SeekBar?) {}
+                      override fun onStopTrackingTouch(s: SeekBar?) {}
+                  })
+                  parent.addView(tv)
+                  parent.addView(sb)
+                  return sb
+              }
+
+              private fun requestPermsAndStart() {
+                  val needed = mutableListOf(Manifest.permission.RECORD_AUDIO)
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                      needed.add(Manifest.permission.POST_NOTIFICATIONS)
+                  }
+                  val missing = needed.filter {
+                      ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+                  }
+                  if (missing.isEmpty()) startEngineService()
+                  else permLauncher.launch(missing.toTypedArray())
+              }
+
+              private fun startEngineService() {
+                  pushSettings()
+                  ContextCompat.startForegroundService(this, Intent(this, KeepAliveService::class.java))
+                  status.text = "Başlatılıyor..."
+              }
+
+              private fun stopEngineService() {
+                  stopService(Intent(this, KeepAliveService::class.java))
+              }
+          }
+          EOF
+
+      - name: APK derle
+        working-directory: android-app
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: APK'yi artifact olarak yukle
+        uses: actions/upload-artifact@v4
+        with:
+          name: HD-Isitme-Cihazi-APK
+          path: android-app/app/build/outputs/apk/debug/app-debug.apk
