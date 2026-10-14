@@ -17,8 +17,29 @@ jobs:
           node-version: '20'
       - run: npm install
       - run: npx cap add android
-      - name: Mikrofon izni ekle
-        run: sed -i 's|<uses-permission android:name="android.permission.INTERNET" />|<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />|' android/app/src/main/AndroidManifest.xml
+      - name: Native dosyaları yerleştir
+        run: |
+          PKG_DIR=android/app/src/main/java/com/hdklinik/isitme
+          mkdir -p $PKG_DIR
+          cp native/*.java $PKG_DIR/
+      - name: Manifest izin ve servis ekle
+        run: |
+          python3 - <<'PY'
+          p = 'android/app/src/main/AndroidManifest.xml'
+          s = open(p, encoding='utf-8').read()
+          perms = [
+            'android.permission.RECORD_AUDIO',
+            'android.permission.MODIFY_AUDIO_SETTINGS',
+            'android.permission.FOREGROUND_SERVICE',
+            'android.permission.FOREGROUND_SERVICE_MICROPHONE',
+            'android.permission.POST_NOTIFICATIONS',
+          ]
+          add = ''.join('\n    <uses-permission android:name="%s" />' % x for x in perms if x not in s)
+          s = s.replace('<application', add + '\n    <application', 1)
+          svc = '\n        <service android:name=".ForegroundAudioService" android:foregroundServiceType="microphone" android:exported="false" />\n    </application>'
+          s = s.replace('</application>', svc, 1)
+          open(p, 'w', encoding='utf-8').write(s)
+          PY
       - run: npx cap sync android
       - name: APK derle
         working-directory: android
