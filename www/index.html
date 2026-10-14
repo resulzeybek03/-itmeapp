@@ -79,6 +79,11 @@
       <input type="range" id="panSlider" min="-1" max="1" step="0.1" value="0">
     </div>
 
+    <div class="control">
+      <div class="label-row"><span>Uzak ses yükseltme:</span><span id="farVal" class="val-badge">50%</span></div>
+      <input type="range" id="farSlider" min="0" max="1" step="0.1" value="0.5">
+    </div>
+
     <div class="meter-container"><div id="meterBar" class="meter-bar"></div></div>
 
     <button id="mainBtn">Başlat</button>
@@ -93,15 +98,15 @@
 <script>
   const $ = id => document.getElementById(id);
   const FG = () => window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.ForegroundAudio;
-  const SLIDERS = ['gateSlider', 'gainSlider', 'midSlider', 'trebleSlider', 'bassCutSlider', 'panSlider'];
+  const SLIDERS = ['gateSlider', 'gainSlider', 'midSlider', 'trebleSlider', 'bassCutSlider', 'panSlider', 'farSlider'];
   const STORE = 'ses_yardimcisi_v5';
   let running = false;
 
   const PRESETS = {
-    crystal: { gate: -42, gain: 3,  mid: 8,  treble: 10, cut: 180 },
-    crowd:   { gate: -36, gain: 3,  mid: 12, treble: 8,  cut: 280 },
-    natural: { gate: -46, gain: 3,  mid: 3,  treble: 5,  cut: 100 },
-    whisper: { gate: -50, gain: 6,  mid: 10, treble: 12, cut: 200 }
+    crystal: { gate: -44, gain: 3, mid: 8,  treble: 10, cut: 180, far: 0.5 },
+    crowd:   { gate: -38, gain: 3, mid: 12, treble: 8,  cut: 280, far: 0.4 },
+    natural: { gate: -48, gain: 3, mid: 3,  treble: 5,  cut: 100, far: 0.3 },
+    whisper: { gate: -54, gain: 5, mid: 10, treble: 12, cut: 200, far: 0.8 }
   };
 
   function params() {
@@ -112,7 +117,8 @@
       mid: +$('midSlider').value,
       treble: +$('trebleSlider').value,
       cut: +$('bassCutSlider').value,
-      pan: +$('panSlider').value
+      pan: +$('panSlider').value,
+      far: +$('farSlider').value
     };
   }
 
@@ -123,6 +129,7 @@
     $('midVal').textContent = '+' + p.mid + ' dB';
     $('trebleVal').textContent = '+' + p.treble + ' dB';
     $('bassCutVal').textContent = (p.cut <= 110 ? 'Hafif' : p.cut <= 220 ? 'Orta' : 'Güçlü') + ' (' + p.cut + ' Hz)';
+    $('farVal').textContent = Math.round(p.far * 100) + '%';
     $('panVal').textContent = p.pan === 0 ? 'Merkez' : (p.pan < 0 ? 'Sol %' : 'Sağ %') + Math.round(Math.abs(p.pan) * 100);
   }
 
@@ -144,7 +151,7 @@
   function applyPreset(name) {
     const p = PRESETS[name];
     $('gateSlider').value = p.gate; $('gainSlider').value = p.gain; $('midSlider').value = p.mid;
-    $('trebleSlider').value = p.treble; $('bassCutSlider').value = p.cut; $('panSlider').value = 0;
+    $('trebleSlider').value = p.treble; $('bassCutSlider').value = p.cut; $('panSlider').value = 0; $('farSlider').value = p.far;
     document.querySelectorAll('.preset-btn').forEach(b => b.classList.toggle('selected', b.dataset.preset === name));
     onChange();
   }
