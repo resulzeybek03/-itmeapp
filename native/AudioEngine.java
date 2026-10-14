@@ -42,6 +42,7 @@ public class AudioEngine {
   private volatile float trebleDb = 10f;
   private volatile float cutHz = 180f;
   private volatile float pan = 0f;
+  private volatile float far = 0.5f;   // Uzak ses yükseltme (0-1)
 
   // DSP durumu (yalnızca ses thread'i kullanır)
   private float thOpen, thClose, floorG;
@@ -50,6 +51,7 @@ public class AudioEngine {
   private int hold = 0;
   private final int holdN = (int) (0.12 * SR);
   private float cEnv = 0f, cGain = 1f;
+  private float uGain = 1f;
   private float lEnv = 0f, lGain = 1f;
   private final Biquad hp = new Biquad(), mud = new Biquad(), mid = new Biquad(), treble = new Biquad();
 
@@ -76,6 +78,7 @@ public class AudioEngine {
       if (o.has("treble")) trebleDb = (float) o.getDouble("treble");
       if (o.has("cut")) cutHz = (float) o.getDouble("cut");
       if (o.has("pan")) pan = (float) o.getDouble("pan");
+      if (o.has("far")) far = Math.max(0f, Math.min(1f, (float) o.getDouble("far")));
       filtersDirty = true;
     } catch (Exception e) {
       emitError("Ayar okunamadı: " + e.getMessage());
@@ -124,7 +127,7 @@ public class AudioEngine {
     }
 
     env = 0f; gateG = 0f; gateOpen = false; hold = 0;
-    cEnv = 0f; cGain = 1f; lEnv = 0f; lGain = 1f;
+    cEnv = 0f; cGain = 1f; uGain = 1f; lEnv = 0f; lGain = 1f;
     filtersDirty = true;
     running = true;
 
@@ -229,6 +232,13 @@ public class AudioEngine {
     }
     cGain += (cTarget - cGain) * (cTarget < cGain ? cAtt : cRel);
     x *= cGain;
+
+    // Uzak / düşük ses yükseltme: konuşma açıkken kısık sesleri yukarı çeker
+    float uDb = 0f;
+    if (far > 0f && gateOpen && lvl < -32f) uDb = Math.min(18f, (-32f - lvl) * far);
+    float uTarget = (float) Math.pow(10, uDb / 20.0);
+    uGain += (uTarget - uGain) * (uTarget > uGain ? cAtt : cRel);
+    x *= uGain;
 
     // 4) Kazanç
     x *= gain;
