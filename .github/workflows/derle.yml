@@ -1,0 +1,484 @@
+name: HD Klinik Isitme Cihazi Derle
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.5
+
+      - name: Android SDK paketlerini kur
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Proje dosyalarini olustur
+        run: |
+          mkdir -p android-app/app/src/main/java/com/resul/isitme
+          cd android-app
+
+          cat > settings.gradle << 'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "IsitmeCihazi"
+          include ":app"
+          EOF
+
+          gradle wrapper --gradle-version 8.5
+          chmod +x gradlew
+
+          cat > gradle.properties << 'EOF'
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          EOF
+
+          cat > build.gradle << 'EOF'
+          plugins {
+              id "com.android.application" version "8.2.2" apply false
+              id "org.jetbrains.kotlin.android" version "1.9.22" apply false
+          }
+          EOF
+
+          cat > app/build.gradle << 'EOF'
+          plugins {
+              id "com.android.application"
+              id "org.jetbrains.kotlin.android"
+          }
+          android {
+              namespace "com.resul.isitme"
+              compileSdk 34
+              defaultConfig {
+                  applicationId "com.resul.isitme"
+                  minSdk 26
+                  targetSdk 34
+                  versionCode 6
+                  versionName "6.0"
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+          }
+          dependencies {
+              implementation "androidx.core:core-ktx:1.12.0"
+              implementation "androidx.appcompat:appcompat:1.6.1"
+          }
+          EOF
+
+          cat > app/src/main/AndroidManifest.xml << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.RECORD_AUDIO" />
+              <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+              <uses-permission android:name="android.permission.WAKE_LOCK" />
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+              <application
+                  android:allowBackup="true"
+                  android:icon="@android:drawable/ic_btn_speak_now"
+                  android:label="HD İşitme Cihazı"
+                  android:supportsRtl="true"
+                  android:theme="@style/Theme.AppCompat.NoActionBar">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:configChanges="orientation|screenSize|keyboardHidden"
+                      android:exported="true"
+                      android:launchMode="singleTask">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+
+                  <service
+                      android:name=".KeepAliveService"
+                      android:enabled="true"
+                      android:exported="false"
+                      android:foregroundServiceType="microphone" />
+              </application>
+          </manifest>
+          EOF
+
+          cat > app/src/main/java/com/resul/isitme/AudioEngine.kt << 'EOF'
+          package com.resul.isitme
+
+          import android.content.Context
+          import android.media.*
+          import android.os.Build
+          import kotlin.math.*
+
+          class Biquad {
+              private var b0 = 1.0; private var b1 = 0.0; private var b2 = 0.0
+              private var a1 = 0.0; private var a2 = 0.0
+              private var x1 = 0.0; private var x2 = 0.0
+              private var y1 = 0.0; private var y2 = 0.0
+
+              fun process(x: Double): Double {
+                  val y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2
+                  x2 = x1; x1 = x; y2 = y1; y1 = y
+                  return y
+              }
+
+              fun setHighPass(freq: Double, sr: Double) {
+                  val w0 = 2.0 * PI * freq / sr
+                  val cosw = cos(w0)
+                  val alpha = sin(w0) / 1.414
+                  val a0 = 1.0 + alpha
+                  b0 = ((1.0 + cosw) / 2.0) / a0
+                  b1 = -(1.0 + cosw) / a0
+                  b2 = ((1.0 + cosw) / 2.0) / a0
+                  a1 = (-2.0 * cosw) / a0
+                  a2 = (1.0 - alpha) / a0
+              }
+
+              fun setPeaking(freq: Double, sr: Double, q: Double, gainDb: Double) {
+                  val a = 10.0.pow(gainDb / 40.0)
+                  val w0 = 2.0 * PI * freq / sr
+                  val cosw = cos(w0)
+                  val alpha = sin(w0) / (2.0 * q)
+                  val a0 = 1.0 + alpha / a
+                  b0 = (1.0 + alpha * a) / a0
+                  b1 = (-2.0 * cosw) / a0
+                  b2 = (1.0 - alpha * a) / a0
+                  a1 = (-2.0 * cosw) / a0
+                  a2 = (1.0 - alpha / a) / a0
+              }
+          }
+
+          object AudioEngine {
+              const val SAMPLE_RATE = 48000
+
+              @Volatile var isRunning = false
+              @Volatile var isReplaying = false
+              @Volatile var replayRequested = false
+              @Volatile var currentLevel = 0
+              @Volatile var gain = 3.5
+              @Volatile var clarityDb = 11.0
+              @Volatile var gateThresh = 0.005
+              @Volatile var highPassHz = 180.0
+              @Volatile var pan = 0.0
+              @Volatile var filtersDirty = true
+
+              private var audioThread: Thread? = null
+              private val ring = ShortArray(SAMPLE_RATE * 8)
+              @Volatile private var ringWritePos = 0
+
+              fun start(context: Context) {
+                  if (isRunning) return
+                  isRunning = true
+                  replayRequested = false
+                  val appCtx = context.applicationContext
+                  audioThread = Thread({ runLoop(appCtx) }, "HearingAudio").also { it.start() }
+              }
+
+              fun stop() {
+                  isRunning = false
+                  try { audioThread?.join(500) } catch (e: InterruptedException) {}
+                  audioThread = null
+                  replayRequested = false
+                  isReplaying = false
+                  currentLevel = 0
+              }
+
+              fun requestReplay() {
+                  if (isRunning) replayRequested = true
+              }
+
+              private fun runLoop(context: Context) {
+                  android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
+
+                  val inMin = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+                  val outMin = AudioTrack.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_16BIT)
+                  if (inMin <= 0 || outMin <= 0) { isRunning = false; return }
+
+                  val recorder = try {
+                      AudioRecord(
+                          MediaRecorder.AudioSource.VOICE_RECOGNITION, SAMPLE_RATE,
+                          AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, inMin * 2
+                      )
+                  } catch (e: Exception) {
+                      isRunning = false
+                      return
+                  }
+                  if (recorder.state != AudioRecord.STATE_INITIALIZED) {
+                      recorder.release()
+                      isRunning = false
+                      return
+                  }
+
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                      try {
+                          val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                          am.getDevices(AudioManager.GET_DEVICES_INPUTS)
+                              .firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_MIC }
+                              ?.let { recorder.setPreferredDevice(it) }
+                      } catch (e: Exception) {}
+                  }
+
+                  val player = AudioTrack.Builder()
+                      .setAudioAttributes(
+                          AudioAttributes.Builder()
+                              .setUsage(AudioAttributes.USAGE_MEDIA)
+                              .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                              .build()
+                      )
+                      .setAudioFormat(
+                          AudioFormat.Builder()
+                              .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                              .setSampleRate(SAMPLE_RATE)
+                              .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
+                              .build()
+                      )
+                      .setBufferSizeInBytes(outMin * 2)
+                      .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+                      .build()
+
+                  val hp = Biquad()
+                  val mud = Biquad()
+                  val mid = Biquad()
+                  val treb = Biquad()
+                  val inBuf = ShortArray(256)
+                  val outBuf = ShortArray(512)
+                  var env = 0.0
+                  var gGain = 1.0
+                  var replayPos = 0
+                  var replayLeft = 0
+
+                  try {
+                      recorder.startRecording()
+                      player.play()
+
+                      while (isRunning) {
+                          if (filtersDirty) {
+                              val sr = SAMPLE_RATE.toDouble()
+                              hp.setHighPass(highPassHz, sr)
+                              mud.setPeaking(320.0, sr, 1.1, -5.0)
+                              mid.setPeaking(2400.0, sr, 0.9, clarityDb * 0.9)
+                              treb.setPeaking(4500.0, sr, 0.85, clarityDb * 1.15)
+                              filtersDirty = false
+                          }
+
+                          if (replayRequested) {
+                              replayRequested = false
+                              if (isReplaying) {
+                                  isReplaying = false
+                              } else {
+                                  replayPos = ringWritePos
+                                  replayLeft = ring.size
+                                  isReplaying = true
+                              }
+                          }
+
+                          val read = recorder.read(inBuf, 0, inBuf.size)
+                          if (read <= 0) continue
+
+                          val lG = if (pan <= 0.0) 1.0 else 1.0 - pan
+                          val rG = if (pan >= 0.0) 1.0 else 1.0 + pan
+                          val g = gain
+                          val thr = gateThresh
+                          var peak = 0.0
+
+                          for (i in 0 until read) {
+                              val outS: Short
+                              if (isReplaying) {
+                                  outS = ring[replayPos]
+                                  replayPos = (replayPos + 1) % ring.size
+                                  replayLeft--
+                                  if (replayLeft <= 0) isReplaying = false
+                              } else {
+                                  var x = inBuf[i] / 32768.0
+                                  val ax = abs(x)
+                                  env = if (ax > env) 0.93 * env + 0.07 * ax else 0.9993 * env + 0.0007 * ax
+                                  val target = if (thr > 0.0 && env < thr) 0.12 else if (env < 0.05) 1.35 else 1.0
+                                  gGain = 0.985 * gGain + 0.015 * target
+
+                                  x = treb.process(mid.process(mud.process(hp.process(x))))
+                                  var y = x * gGain * g
+                                  val ay = abs(y)
+                                  if (ay > 0.65) y = sign(y) * (0.65 + 0.35 * tanh((ay - 0.65) / 0.35))
+                                  if (ay > peak) peak = ay
+
+                                  outS = (y * 32767.0).coerceIn(-32768.0, 32767.0).toInt().toShort()
+                                  ring[ringWritePos] = outS
+                                  ringWritePos = (ringWritePos + 1) % ring.size
+                              }
+                              outBuf[i * 2] = (outS * lG).coerceIn(-32768.0, 32767.0).toInt().toShort()
+                              outBuf[i * 2 + 1] = (outS * rG).coerceIn(-32768.0, 32767.0).toInt().toShort()
+                          }
+
+                          currentLevel = (peak * 100.0).toInt().coerceIn(0, 100)
+                          player.write(outBuf, 0, read * 2)
+                      }
+                  } finally {
+                      isRunning = false
+                      isReplaying = false
+                      currentLevel = 0
+                      try { recorder.stop() } catch (e: Exception) {}
+                      recorder.release()
+                      try { player.stop() } catch (e: Exception) {}
+                      player.release()
+                  }
+              }
+          }
+          EOF
+
+          cat > app/src/main/java/com/resul/isitme/KeepAliveService.kt << 'EOF'
+          package com.resul.isitme
+
+          import android.app.*
+          import android.content.Context
+          import android.content.Intent
+          import android.content.pm.ServiceInfo
+          import android.os.*
+          import androidx.core.app.NotificationCompat
+
+          class KeepAliveService : Service() {
+              private var wakeLock: PowerManager.WakeLock? = null
+
+              override fun onCreate() {
+                  super.onCreate()
+                  val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+                  wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Isitme::Lock").apply {
+                      setReferenceCounted(false)
+                      acquire(12 * 60 * 60 * 1000L)
+                  }
+              }
+
+              override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+                  val chId = "ha_ch"
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                      val ch = NotificationChannel(chId, "İşitme Servisi", NotificationManager.IMPORTANCE_LOW)
+                      getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
+                  }
+                  val pi = PendingIntent.getActivity(
+                      this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
+                  )
+                  val notif = NotificationCompat.Builder(this, chId)
+                      .setContentTitle("HD Klinik İşitme Cihazı Aktif")
+                      .setContentText("Mikrofon dinleniyor")
+                      .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+                      .setContentIntent(pi)
+                      .setOngoing(true)
+                      .build()
+
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                      startForeground(1, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+                  } else {
+                      startForeground(1, notif)
+                  }
+
+                  AudioEngine.start(this)
+                  return START_STICKY
+              }
+
+              override fun onDestroy() {
+                  AudioEngine.stop()
+                  wakeLock?.let { if (it.isHeld) it.release() }
+                  super.onDestroy()
+              }
+
+              override fun onBind(intent: Intent?): IBinder? = null
+          }
+          EOF
+
+          cat > app/src/main/java/com/resul/isitme/MainActivity.kt << 'EOF'
+          package com.resul.isitme
+
+          import android.Manifest
+          import android.content.Intent
+          import android.content.pm.PackageManager
+          import android.graphics.Color
+          import android.graphics.drawable.GradientDrawable
+          import android.os.Build
+          import android.os.Bundle
+          import android.os.Handler
+          import android.os.Looper
+          import android.view.Gravity
+          import android.view.View
+          import android.view.ViewGroup
+          import android.widget.*
+          import androidx.activity.result.contract.ActivityResultContracts
+          import androidx.appcompat.app.AppCompatActivity
+          import androidx.core.content.ContextCompat
+          import kotlin.math.roundToInt
+
+          private data class Preset(val gain: Double, val clarity: Int, val gate: Int, val hz: Int)
+
+          private val PRESETS = linkedMapOf(
+              "💎 Kristal Netlik" to Preset(3.5, 11, 10, 180),
+              "👥 Gürültülü Ortam" to Preset(3.0, 13, 18, 280),
+              "🌿 Doğal & TV" to Preset(3.0, 5, 6, 100),
+              "👂 Uzak / Fısıltı" to Preset(7.5, 15, 8, 200)
+          )
+
+          class MainActivity : AppCompatActivity() {
+
+              private val ui = Handler(Looper.getMainLooper())
+              private var lastTap = 0L
+              private var lastOn: Boolean? = null
+              private var lastRep = false
+
+              private lateinit var btnMain: Button
+              private lateinit var btnReplay: Button
+              private lateinit var meter: ProgressBar
+              private lateinit var statusTv: TextView
+              private lateinit var blackout: FrameLayout
+              private lateinit var seekGain: SeekBar
+              private lateinit var seekClarity: SeekBar
+              private lateinit var seekGate: SeekBar
+              private lateinit var seekBass: SeekBar
+              private val presetBtns = mutableMapOf<String, Button>()
+
+              private val permLauncher = registerForActivityResult(
+                  ActivityResultContracts.RequestMultiplePermissions()
+              ) { result ->
+                  if (result[Manifest.permission.RECORD_AUDIO] == true) startEngineService()
+                  else statusTv.text = "Mikrofon izni verilmedi"
+              }
+
+              private val tick = object : Runnable {
+                  override fun run() {
+                      val on = AudioEngine.isRunning
+                      if (on != lastOn) {
+                          lastOn = on
+                          btnMain.text = if (on) "Durdur" else "Başlat"
+                          paint(btnMain, if (on) "#FF5252" else "#00E676", if (on) "#FFFFFF" else "#000000")
+                          btnReplay.isEnabled = on
+                          statusTv.text = if (on) "Dinleniyor" else "Durduruldu"
+          
