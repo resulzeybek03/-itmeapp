@@ -19,16 +19,17 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - uses: android-actions/setup-android@v3
-
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.5
 
       - name: Android SDK paketlerini kur
         run: |
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager "platforms;android-34" "build-tools;34.0.0"
+          SDKMAN=$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -n 1)
+          if [ -z "$SDKMAN" ]; then SDKMAN="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"; fi
+          echo "sdkmanager: $SDKMAN"
+          yes | "$SDKMAN" --licenses > /dev/null || true
+          "$SDKMAN" "platforms;android-34" "build-tools;34.0.0"
 
       - name: Proje dosyalarini olustur
         run: |
