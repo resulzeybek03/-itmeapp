@@ -199,7 +199,7 @@ jobs:
                           val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
                           val builtIn = am.getDevices(AudioManager.GET_DEVICES_INPUTS).firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_MIC }
                           if (builtIn != null) recorder.setPreferredDevice(builtIn)
-                      } catch (_: Exception) {}
+                      } catch (e: Exception) {}
 
                       val player = AudioTrack.Builder()
                           .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
@@ -266,13 +266,13 @@ jobs:
                           }
                       }
                       currentLevel = 0
-                      try { recorder.stop(); recorder.release(); player.stop(); player.release() } catch (_: Exception) {}
+                      try { recorder.stop(); recorder.release(); player.stop(); player.release() } catch (e: Exception) {}
                   }.apply { start() }
               }
 
               fun stop() {
                   isRunning = false; isReplaying = false
-                  try { audioThread?.join(300) } catch (_: Exception) {}
+                  try { audioThread?.join(300) } catch (e: Exception) {}
                   audioThread = null; currentLevel = 0
               }
           }
@@ -313,7 +313,7 @@ jobs:
                   try {
                       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) startForeground(1, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
                       else startForeground(1, notif)
-                  } catch (_: Exception) {}
+                  } catch (e: Exception) {}
 
                   AudioEngine.start(applicationContext)
                   return START_STICKY
@@ -553,10 +553,8 @@ jobs:
           }
           ' > app/src/main/java/com/resul/isitme/MainActivity.kt
 
-          cd app
-          gradle wrapper --gradle-version 8.5
           chmod +x gradlew
-          ./gradlew assembleRelease
+          ./gradlew assembleRelease bundleRelease --no-daemon
 
       - name: APK ve AAB Dosyalarini Kaydet ve Yayinla
         run: |
