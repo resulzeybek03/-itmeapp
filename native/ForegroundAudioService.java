@@ -38,7 +38,16 @@ public class ForegroundAudioService extends Service {
     } else {
       startForeground(NOTIF_ID, n);
     }
+    String params = intent != null ? intent.getStringExtra("params") : null;
+    boolean ok = AudioEngine.get().start(params);
+    if (!ok) stopSelf();
     return START_STICKY;
+  }
+
+  @Override
+  public void onDestroy() {
+    AudioEngine.get().stop();
+    super.onDestroy();
   }
 
   private Notification buildNotification() {
