@@ -1,4 +1,4 @@
-name: APK Derle
+name: HD Klinik Isitme Cihazi Derle
 
 on:
   push:
@@ -16,18 +16,16 @@ jobs:
 
       - uses: actions/setup-java@v4
         with:
-          distribution: "temurin"
-          java-version: "17"
+          distribution: temurin
+          java-version: 17
 
-      - name: Olustur ve Derle
+      - name: Android Projesini ve Yerel Ses Motorunu Olustur
         run: |
-          python3 - << 'PYEOF'
-          import os
+          mkdir -p android-app/app/src/main/java/com/resul/isitme
+          cd android-app
 
-          os.makedirs("android-app/app/src/main/java/com/resul/isitme", exist_ok=True)
-
-          with open("android-app/settings.gradle", "w") as f:
-              f.write('''pluginManagement {
+          echo '
+          pluginManagement {
               repositories {
                   google()
                   mavenCentral()
@@ -43,20 +41,24 @@ jobs:
           }
           rootProject.name = "IsitmeCihazi"
           include ":app"
-          ''')
+          ' > settings.gradle
 
-          with open("android-app/gradle.properties", "w") as f:
-              f.write("org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8\nandroid.useAndroidX=true\n")
+          gradle wrapper --gradle-version 8.5
 
-          with open("android-app/build.gradle", "w") as f:
-              f.write('''plugins {
+          echo '
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          ' > gradle.properties
+
+          echo '
+          plugins {
               id "com.android.application" version "8.2.2" apply false
               id "org.jetbrains.kotlin.android" version "1.9.22" apply false
           }
-          ''')
+          ' > build.gradle
 
-          with open("android-app/app/build.gradle", "w") as f:
-              f.write('''plugins {
+          echo '
+          plugins {
               id "com.android.application"
               id "org.jetbrains.kotlin.android"
           }
@@ -67,8 +69,8 @@ jobs:
                   applicationId "com.resul.isitme"
                   minSdk 26
                   targetSdk 34
-                  versionCode 4
-                  versionName "4.0"
+                  versionCode 5
+                  versionName "5.0"
               }
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
@@ -82,10 +84,9 @@ jobs:
               implementation "androidx.core:core-ktx:1.12.0"
               implementation "androidx.appcompat:appcompat:1.6.1"
           }
-          ''')
+          ' > app/build.gradle
 
-          with open("android-app/app/src/main/AndroidManifest.xml", "w") as f:
-              f.write('''<?xml version="1.0" encoding="utf-8"?>
+          echo '<?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.RECORD_AUDIO" />
               <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
@@ -119,10 +120,10 @@ jobs:
                       android:foregroundServiceType="microphone" />
               </application>
           </manifest>
-          ''')
+          ' > app/src/main/AndroidManifest.xml
 
-          with open("android-app/app/src/main/java/com/resul/isitme/AudioEngine.kt", "w") as f:
-              f.write('''package com.resul.isitme
+          echo '
+          package com.resul.isitme
 
           import android.content.Context
           import android.media.*
@@ -275,10 +276,10 @@ jobs:
                   audioThread = null; currentLevel = 0
               }
           }
-          ''')
+          ' > app/src/main/java/com/resul/isitme/AudioEngine.kt
 
-          with open("android-app/app/src/main/java/com/resul/isitme/KeepAliveService.kt", "w") as f:
-              f.write('''package com.resul.isitme
+          echo '
+          package com.resul.isitme
 
           import android.app.*
           import android.content.Context
@@ -326,10 +327,10 @@ jobs:
 
               override fun onBind(intent: Intent?): IBinder? = null
           }
-          ''')
+          ' > app/src/main/java/com/resul/isitme/KeepAliveService.kt
 
-          with open("android-app/app/src/main/java/com/resul/isitme/MainActivity.kt", "w") as f:
-              f.write('''package com.resul.isitme
+          echo '
+          package com.resul.isitme
 
           import android.Manifest
           import android.content.Intent
@@ -421,4 +422,154 @@ jobs:
                   seekGain = addSlider(card, "Genel Ses Gücü (Amplifikatör)", 120, 35, { (it / 10.0).toString() + "x" }) {
                       AudioEngine.gain = (it.coerceAtLeast(10)) / 10.0
                   }
-                  seekClarity = addSlider(card, "Konuşma & Tiz Berraklığı", 18, 12, {
+                  seekClarity = addSlider(card, "Konuşma & Tiz Berraklığı", 18, 12, { "+" + it.toString() + " dB" }) {
+                      AudioEngine.clarityDb = it.toDouble(); AudioEngine.filtersDirty = true
+                  }
+                  seekGate = addSlider(card, "Sessizlikte Tıslama Kesici", 30, 10, { "Seviye " + it.toString() }) {
+                      AudioEngine.gateThresh = it * 0.0005
+                  }
+                  seekBass = addSlider(card, "Dip Uğultu Kesme (Hz)", 350, 180, { it.coerceAtLeast(80).toString() + " Hz" }) {
+                      AudioEngine.highPassHz = it.coerceAtLeast(80).toDouble(); AudioEngine.filtersDirty = true
+                  }
+                  addSlider(card, "Kulak Dengesi (Sol / Sağ)", 20, 10, { "Denge: " + (it - 10).toString() }) {
+                      AudioEngine.pan = (it - 10) / 10.0
+                  }
+
+                  meterBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+                      max = 100; progress = 0; setPadding(0, 30, 0, 20)
+                  }
+                  card.addView(meterBar)
+
+                  val actRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                  btnMain = makeBtn("Başlat", "#00E676", "#000000").apply {
+                      textSize = 18f
+                      layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.4f).apply { rightMargin = 14 }
+                      setOnClickListener { toggleEngine() }
+                  }
+                  btnReplay = makeBtn("⏪ Son 8 Sn", "#232834", "#00E676").apply {
+                      textSize = 14f
+                      layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                      setOnClickListener {
+                          if (AudioEngine.isRunning) {
+                              AudioEngine.isReplaying = !AudioEngine.isReplaying
+                              text = if (AudioEngine.isReplaying) "🔊 Çalıyor..." else "⏪ Son 8 Sn"
+                          }
+                      }
+                  }
+                  actRow.addView(btnMain); actRow.addView(btnReplay)
+                  card.addView(actRow)
+
+                  statusTv = TextView(this).apply {
+                      text = "Hazır — Başlat tuşuna dokunun"
+                      textSize = 13f; setTextColor(Color.GRAY); gravity = Gravity.CENTER; setPadding(0, 24, 0, 0)
+                  }
+                  card.addView(statusTv)
+                  scroll.addView(card)
+                  root.addView(scroll)
+
+                  blackoutLayer = FrameLayout(this).apply {
+                      setBackgroundColor(Color.BLACK)
+                      visibility = View.GONE
+                      var lastTap = 0L
+                      setOnClickListener {
+                          val now = System.currentTimeMillis()
+                          if (now - lastTap < 400) visibility = View.GONE
+                          lastTap = now
+                      }
+                  }
+                  root.addView(blackoutLayer, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+                  setContentView(root)
+
+                  requestPerms()
+                  startMeterLoop()
+              }
+
+              private fun makeBtn(txt: String, bgHex: String, fgHex: String): Button {
+                  return Button(this).apply {
+                      text = txt; isAllCaps = false; setTextColor(Color.parseColor(fgHex))
+                      background = GradientDrawable().apply {
+                          setColor(Color.parseColor(bgHex))
+                          cornerRadius = 28f
+                      }
+                  }
+              }
+
+              private fun addSlider(parent: LinearLayout, title: String, maxVal: Int, initVal: Int, fmt: (Int) -> String, onChange: (Int) -> Unit): SeekBar {
+                  val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, 22, 0, 4) }
+                  val lbl = TextView(this).apply { text = title; setTextColor(Color.LTGRAY); textSize = 13f; layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f) }
+                  val valTv = TextView(this).apply { text = fmt(initVal); setTextColor(Color.parseColor("#00E676")); textSize = 13f }
+                  row.addView(lbl); row.addView(valTv)
+                  val sb = SeekBar(this).apply {
+                      max = maxVal; progress = initVal
+                      setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                          override fun onProgressChanged(s: SeekBar?, p: Int, f: Boolean) { valTv.text = fmt(p); onChange(p) }
+                          override fun onStartTrackingTouch(s: SeekBar?) {}
+                          override fun onStopTrackingTouch(s: SeekBar?) {}
+                      })
+                  }
+                  parent.addView(row); parent.addView(sb)
+                  return sb
+              }
+
+              private fun toggleEngine() {
+                  if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                      requestPerms()
+                      return
+                  }
+                  if (AudioEngine.isRunning) {
+                      stopService(Intent(this, KeepAliveService::class.java))
+                      AudioEngine.stop()
+                      btnMain.text = "Başlat"
+                      btnMain.background = GradientDrawable().apply { setColor(Color.parseColor("#00E676")); cornerRadius = 28f }
+                      btnMain.setTextColor(Color.BLACK)
+                      statusTv.text = "Durduruldu"
+                  } else {
+                      val intent = Intent(this, KeepAliveService::class.java)
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
+                      AudioEngine.start(applicationContext)
+                      btnMain.text = "Durdur"
+                      btnMain.background = GradientDrawable().apply { setColor(Color.parseColor("#FF5252")); cornerRadius = 28f }
+                      btnMain.setTextColor(Color.WHITE)
+                      statusTv.text = "⚡ Aktif — Arka Planda Çalışıyor"
+                  }
+              }
+
+              private fun startMeterLoop() {
+                  uiHandler.postDelayed(object : Runnable {
+                      override fun run() {
+                          meterBar.progress = AudioEngine.currentLevel
+                          if (!AudioEngine.isReplaying && btnReplay.text != "⏪ Son 8 Sn") btnReplay.text = "⏪ Son 8 Sn"
+                          uiHandler.postDelayed(this, 80)
+                      }
+                  }, 80)
+              }
+
+              private fun requestPerms() {
+                  val perms = mutableListOf(Manifest.permission.RECORD_AUDIO)
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) perms.add(Manifest.permission.POST_NOTIFICATIONS)
+                  val needed = perms.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
+                  if (needed.isNotEmpty()) ActivityCompat.requestPermissions(this, needed.toTypedArray(), 101)
+              }
+          }
+          ' > app/src/main/java/com/resul/isitme/MainActivity.kt
+
+          cd app
+          gradle wrapper --gradle-version 8.5
+          chmod +x gradlew
+          ./gradlew assembleRelease
+
+      - name: APK ve AAB Dosyalarini Kaydet ve Yayinla
+        run: |
+          mkdir -p output
+          cp android-app/app/build/outputs/apk/release/app-release-unsigned.apk HD-Isitme-Cihazi.apk
+          cp android-app/app/build/outputs/bundle/release/app-release.aab HD-Isitme-Cihazi.aab
+
+      - name: GitHub Releases olarak yayinla
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v5.0
+          name: "HD İşitme Cihazı v5.0"
+          files: |
+            HD-Isitme-Cihazi.apk
+            HD-Isitme-Cihazi.aab
+          overwrite: true
