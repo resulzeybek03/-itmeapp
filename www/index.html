@@ -369,6 +369,7 @@
 
         updateUIValues();
         startBackgroundHelpers();
+        startNativeService();
         requestWakeLock();
         updateMeter();
 
@@ -386,6 +387,7 @@
       cancelAnimationFrame(animId);
       meterBar.style.width = '0%';
       if (silentAudio) silentAudio.pause();
+      stopNativeService();
       if (wakeLock) { try { await wakeLock.release(); } catch (e) {} wakeLock = null; }
       if (stream) stream.getTracks().forEach(t => t.stop());
       stream = null;
@@ -404,6 +406,19 @@
     sliders.forEach(id => $(id).value = $(id).value);
     $('gateVal').textContent = $('gateSlider').value + ' dB';
     updateUIValues();
+
+    // ---- Native arka plan servisi (Android foreground service) ----
+    function nativeFG() {
+      return window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.ForegroundAudio;
+    }
+    async function startNativeService() {
+      const p = nativeFG();
+      if (p) { try { await p.start(); } catch (e) {} }
+    }
+    async function stopNativeService() {
+      const p = nativeFG();
+      if (p) { try { await p.stop(); } catch (e) {} }
+    }
   </script>
 </body>
 </html>
