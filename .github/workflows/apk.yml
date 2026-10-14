@@ -554,13 +554,11 @@ jobs:
           ' > app/src/main/java/com/resul/isitme/MainActivity.kt
 
           chmod +x gradlew
-          ./gradlew assembleRelease bundleRelease --no-daemon
+          ./gradlew assembleDebug --no-daemon
 
       - name: APK ve AAB Dosyalarini Kaydet ve Yayinla
         run: |
-          mkdir -p output
-          cp android-app/app/build/outputs/apk/release/app-release-unsigned.apk HD-Isitme-Cihazi.apk
-          cp android-app/app/build/outputs/bundle/release/app-release.aab HD-Isitme-Cihazi.aab
+          cp android-app/app/build/outputs/apk/debug/app-debug.apk HD-Isitme-Cihazi.apk
 
       - name: GitHub Releases olarak yayinla
         uses: softprops/action-gh-release@v2
@@ -569,5 +567,4 @@ jobs:
           name: "HD İşitme Cihazı v5.0"
           files: |
             HD-Isitme-Cihazi.apk
-            HD-Isitme-Cihazi.aab
           overwrite: true
