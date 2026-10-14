@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
   <meta name="theme-color" content="#0f1115">
   <meta name="apple-mobile-web-app-capable" content="yes">
+  <link rel="manifest" href="manifest.json">
   <title>HD Klinik İşitme Cihazı</title>
   <style>
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -16,37 +17,27 @@
     .pill { font-size: 11px; padding: 4px 8px; border-radius: 20px; background: #222733; color: #9aa0a6; font-weight: 600; }
     .pill.on { background: rgba(0, 230, 118, 0.15); color: #00e676; border: 1px solid rgba(0, 230, 118, 0.3); }
     .pill.warn { background: rgba(255, 183, 77, 0.2); color: #ffb74d; }
-
     .top-tools { display: flex; gap: 8px; margin-bottom: 12px; }
     .tool-btn { flex: 1; padding: 9px; font-size: 12.5px; border-radius: 10px; border: 1px solid #323949; background: #1f242f; color: #e0e0e0; font-weight: 600; cursor: pointer; }
     .tool-btn:active { transform: scale(0.98); }
-
     .presets { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-bottom: 12px; }
     .preset-btn { padding: 9px 6px; font-size: 12.5px; border-radius: 10px; border: 1px solid #2f3542; background: #20242e; color: #ccc; cursor: pointer; font-weight: 600; transition: 0.15s; }
     .preset-btn.selected { background: #00e676; color: #000; border-color: #00e676; }
     .preset-btn.full { grid-column: span 2; }
-
     .control { margin: 10px 0; }
     .label-row { display: flex; justify-content: space-between; font-size: 12.5px; margin-bottom: 4px; color: #cfd4dc; }
     .val-badge { color: #00e676; font-weight: bold; }
     select, input[type="range"] { width: 100%; padding: 7px; border-radius: 8px; background: #232833; color: #fff; border: 1px solid #363d4d; accent-color: #00e676; font-size: 13px; }
-
     .meter-container { width: 100%; height: 7px; background: #232833; border-radius: 6px; overflow: hidden; margin-top: 12px; }
     .meter-bar { height: 100%; width: 0%; background: linear-gradient(90deg, #00e676, #ffeb3b, #ff5252); }
-
     .btn-row { display: flex; gap: 8px; margin-top: 12px; }
     #mainBtn { flex: 1.4; padding: 15px; font-size: 16px; border-radius: 14px; border: none; background: #00e676; color: #000; font-weight: bold; cursor: pointer; }
     #mainBtn.active { background: #ff5252; color: #fff; }
     #replayBtn { flex: 1; padding: 15px 8px; font-size: 13px; border-radius: 14px; border: 1px solid #3b4354; background: #232834; color: #fff; font-weight: bold; cursor: pointer; opacity: 0.45; pointer-events: none; }
     #replayBtn.ready { opacity: 1; pointer-events: auto; border-color: #00e676; color: #00e676; }
     #replayBtn.playing { background: #ffb74d; color: #000; border-color: #ffb74d; opacity: 1; pointer-events: auto; }
-
     .status-bar { font-size: 11px; color: #8b929e; text-align: center; margin-top: 9px; }
-
-    /* Cep Modu */
     #blackoutOverlay { display: none; position: fixed; inset: 0; background: #000; z-index: 9999; flex-direction: column; align-items: center; justify-content: center; color: #444; font-size: 14px; text-align: center; padding: 20px; }
-
-    /* İşitme Testi (Odyogram) Penceresi */
     #testModal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.88); z-index: 5000; align-items: center; justify-content: center; padding: 16px; }
     .modal-box { background: #181c24; border: 1px solid #323949; border-radius: 20px; padding: 20px; width: 100%; max-width: 380px; text-align: center; }
     .freq-title { font-size: 24px; font-weight: bold; color: #00e676; margin: 10px 0 4px; }
@@ -58,20 +49,17 @@
 </head>
 <body>
 
-  <!-- Cep Modu Siyah Ekran -->
   <div id="blackoutOverlay">
     <p>🌙 <strong>Cep Modu Aktif</strong><br><br>Klinik ses motoru arka planda çalışıyor.<br>Ekranı açmak için <strong>iki kez dokunun</strong>.</p>
   </div>
 
-  <!-- Uygulama İçi İşitme Testi (Odyogram) -->
   <div id="testModal">
     <div class="modal-box">
       <h3 style="margin:0; color:#fff;">🩺 Kişisel İşitme Testi</h3>
       <p style="font-size:12px; color:#aaa; margin:6px 0 12px;">Kulaklığınızı takın. Kesik kesik çalan "Bip" sesini <strong>en kısıkta</strong> duyduğunuz an <em>"Duyuyorum"</em> butonuna basın.</p>
       <div id="testStepInfo" style="font-size:12px; color:#ffb74d;">Adım 1 / 5</div>
-      <div id="testFreqLabel" class="freq-title">500 Hz (Kalın Sesler)</div>
+      <div id="testFreqLabel" class="freq-title">500 Hz</div>
       <div id="testDbLabel" style="font-size:13px; color:#ccc; margin-bottom:14px;">Test Seviyesi: 20 dB</div>
-
       <button class="test-btn btn-louder" onclick="makeTestToneLouder()">🔊 Duymuyorum, Sesi Biraz Artır (+5 dB)</button>
       <button class="test-btn btn-hear" onclick="confirmTestToneHeard()">✅ Şimdi Duyuyorum (Sonraki Frekans)</button>
       <button class="test-btn btn-cancel" onclick="closeHearingTest()">İptal Et</button>
@@ -81,7 +69,7 @@
   <div class="card">
     <div class="header-row">
       <h2>HD Klinik İşitme Cihazı</h2>
-      <span id="latencyBadge" class="pill">⚡ 0 ms DSP</span>
+      <span id="latencyBadge" class="pill">⚡ ~0 ms DSP</span>
     </div>
 
     <div class="badge-row">
@@ -105,7 +93,7 @@
     <div class="control">
       <div class="label-row"><span>Mikrofon:</span></div>
       <select id="micSelect">
-        <option value="">Speakerphone (Telefon Mikrofonu)</option>
+        <option value="">Varsayılan (Telefon Mikrofonu)</option>
       </select>
     </div>
 
@@ -128,7 +116,7 @@
     <div class="control">
       <div class="label-row">
         <span>Sessizlikte Dip Tıslama Kesici (Noise Gate):</span>
-        <span id="gateVal" class="val-badge">Orta (Akıllı)</span>
+        <span id="gateVal" class="val-badge">Akıllı (Orta)</span>
       </div>
       <input type="range" id="gateSlider" min="0" max="30" step="2" value="10">
     </div>
@@ -150,20 +138,19 @@
 
     <div class="btn-row">
       <button id="mainBtn">Başlat</button>
-      <button id="replayBtn" onclick="triggerInstantReplay()">⏪ Son 8 Sn</button>
+      <button id="replayBtn">⏪ Son 8 Sn</button>
     </div>
 
     <div id="statusText" class="status-bar">Hazır — Tüm ayarlarınız otomatik kaydedilir</div>
   </div>
 
   <script>
-    // --- AUDIO WORKLET KODU (0ms Noise Gate + WDRC Fısıltı Avcısı + 8 Sn Döngüsel Bellek) ---
+    // ===== AUDIO WORKLET (gate + fısıltı kazancı + 8 sn döngüsel bellek) =====
     const workletProcessorCode = `
       class HearingAidProcessor extends AudioWorkletProcessor {
         constructor() {
           super();
-          this.sampleRate = 48000;
-          this.bufferSize = this.sampleRate * 8; // 8 saniyelik dairesel kayıt tamponu
+          this.bufferSize = Math.floor(sampleRate * 8);
           this.ringBuffer = new Float32Array(this.bufferSize);
           this.writePtr = 0;
           this.envelope = 0;
@@ -181,7 +168,7 @@
               const firstPart = this.bufferSize - this.writePtr;
               ordered.set(this.ringBuffer.subarray(this.writePtr), 0);
               ordered.set(this.ringBuffer.subarray(0, this.writePtr), firstPart);
-              this.port.postMessage({ type: 'replayBuffer', buffer: ordered });
+              this.port.postMessage({ type: 'replayBuffer', buffer: ordered }, [ordered.buffer]);
             }
           };
         }
@@ -189,41 +176,36 @@
         process(inputs, outputs) {
           const input = inputs[0];
           const output = outputs[0];
-          if (!input || !input[0]) return true;
+          if (!input || !input[0] || !output || !output[0]) return true;
 
           const inCh = input[0];
           const outCh = output[0];
           const thresh = this.gateThreshold;
 
           for (let i = 0; i < inCh.length; i++) {
-            let s = inCh[i];
+            const s = inCh[i];
             const absS = Math.abs(s);
 
-            // Hızlı zarf takipçisi (Attack: 1ms, Release: 120ms)
             if (absS > this.envelope) {
               this.envelope = 0.95 * this.envelope + 0.05 * absS;
             } else {
               this.envelope = 0.9995 * this.envelope + 0.0005 * absS;
             }
 
-            // 1. Akıllı Noise Gate (Sessizlikte dip tıslamayı susturur)
             let targetGain = 1.0;
             if (thresh > 0 && this.envelope < thresh) {
-              targetGain = 0.12; // Tam kopukluk hissi vermeden %88 tıslamayı keser
+              targetGain = 0.12;
             } else if (this.envelope >= thresh && this.envelope < 0.06) {
-              // 2. WDRC Fısıltı Avcısı: Kısık konuşmaları otomatik 1.45x destekler
               targetGain = 1.35;
             }
 
             this.gateGain = 0.99 * this.gateGain + 0.01 * targetGain;
             let processed = s * this.gateGain;
 
-            // 3. 0ms Soft-Clip Limiter (Kulak zarını ani patlamalardan korur)
             if (processed > 0.95 || processed < -0.95) {
               processed = Math.tanh(processed);
             }
 
-            // 4. Son 8 saniyelik dairesel hafızaya yaz
             if (!this.isReplaying) {
               this.ringBuffer[this.writePtr] = processed;
               this.writePtr = (this.writePtr + 1) % this.bufferSize;
@@ -237,45 +219,46 @@
       registerProcessor('hearing-aid-processor', HearingAidProcessor);
     `;
 
-    let audioCtx, stream, gainNode, highPass, mudCut, notchFilter, panner, analyser, workletNode;
-    let audiogramFilters = [];
-    let animId, feedbackInterval, wakeLock, keepAliveAudio, replaySource;
-
-    // 5 Bantlı Odyogram Frekansları ve Kazançları (500, 1000, 2000, 4000, 6000 Hz)
+    // ===== STATE =====
     const AUDIOGRAM_FREQS = [500, 1000, 2000, 4000, 6000];
-    let customAudiogramGains = [2, 4, 8, 12, 12]; // Varsayılan odyogram eğrisi
+    let customAudiogramGains = [2, 4, 8, 12, 12];
 
-    const mainBtn = document.getElementById('mainBtn');
-    const replayBtn = document.getElementById('replayBtn');
-    const micSelect = document.getElementById('micSelect');
-    const gainSlider = document.getElementById('gainSlider');
-    const claritySlider = document.getElementById('claritySlider');
-    const gateSlider = document.getElementById('gateSlider');
-    const bassCutSlider = document.getElementById('bassCutSlider');
-    const panSlider = document.getElementById('panSlider');
-    const meterBar = document.getElementById('meterBar');
-    const statusText = document.getElementById('statusText');
-    const feedbackBadge = document.getElementById('feedbackBadge');
+    let audioCtx = null, stream = null, srcNode = null;
+    let highPass = null, mudCut = null, notchFilter = null, panner = null;
+    let analyser = null, gainNode = null, workletNode = null;
+    let audiogramFilters = [];
+    let feedbackInterval = null, wakeLock = null, replaySource = null;
+    let engineRunning = false;
 
+    // ===== ELEMENTS =====
+    const $ = id => document.getElementById(id);
+    const mainBtn = $('mainBtn'), replayBtn = $('replayBtn'), micSelect = $('micSelect');
+    const gainSlider = $('gainSlider'), claritySlider = $('claritySlider'), gateSlider = $('gateSlider');
+    const bassCutSlider = $('bassCutSlider'), panSlider = $('panSlider');
+    const statusText = $('statusText'), feedbackBadge = $('feedbackBadge');
+    const testModal = $('testModal'), blackoutOverlay = $('blackoutOverlay');
+
+    // ===== SETTINGS =====
     function loadSavedSettings() {
-      if (localStorage.getItem('ha2_gain')) gainSlider.value = localStorage.getItem('ha2_gain');
-      if (localStorage.getItem('ha2_clarity')) claritySlider.value = localStorage.getItem('ha2_clarity');
-      if (localStorage.getItem('ha2_gate')) gateSlider.value = localStorage.getItem('ha2_gate');
-      if (localStorage.getItem('ha2_bass')) bassCutSlider.value = localStorage.getItem('ha2_bass');
-      if (localStorage.getItem('ha2_pan')) panSlider.value = localStorage.getItem('ha2_pan');
-      if (localStorage.getItem('ha2_audiogram')) {
-        try { customAudiogramGains = JSON.parse(localStorage.getItem('ha2_audiogram')); } catch(e){}
-      }
-      updateUIValues();
+      try {
+        if (localStorage.getItem('ha2_gain')) gainSlider.value = localStorage.getItem('ha2_gain');
+        if (localStorage.getItem('ha2_clarity')) claritySlider.value = localStorage.getItem('ha2_clarity');
+        if (localStorage.getItem('ha2_gate')) gateSlider.value = localStorage.getItem('ha2_gate');
+        if (localStorage.getItem('ha2_bass')) bassCutSlider.value = localStorage.getItem('ha2_bass');
+        if (localStorage.getItem('ha2_pan')) panSlider.value = localStorage.getItem('ha2_pan');
+        if (localStorage.getItem('ha2_audiogram')) customAudiogramGains = JSON.parse(localStorage.getItem('ha2_audiogram'));
+      } catch (e) { console.warn('Ayarlar okunamadı', e); }
     }
 
     function saveSettings() {
-      localStorage.setItem('ha2_gain', gainSlider.value);
-      localStorage.setItem('ha2_clarity', claritySlider.value);
-      localStorage.setItem('ha2_gate', gateSlider.value);
-      localStorage.setItem('ha2_bass', bassCutSlider.value);
-      localStorage.setItem('ha2_pan', panSlider.value);
-      if (micSelect.value) localStorage.setItem('ha2_mic', micSelect.value);
+      try {
+        localStorage.setItem('ha2_gain', gainSlider.value);
+        localStorage.setItem('ha2_clarity', claritySlider.value);
+        localStorage.setItem('ha2_gate', gateSlider.value);
+        localStorage.setItem('ha2_bass', bassCutSlider.value);
+        localStorage.setItem('ha2_pan', panSlider.value);
+        if (micSelect.value) localStorage.setItem('ha2_mic', micSelect.value);
+      } catch (e) {}
     }
 
     function updateUIValues() {
@@ -285,12 +268,12 @@
       const cutHz = parseInt(bassCutSlider.value);
       const pan = parseFloat(panSlider.value);
 
-      document.getElementById('gainVal').textContent = `${gain}x`;
-      document.getElementById('clarityVal').textContent = `+${clarity} dB`;
-      document.getElementById('gateVal').textContent = gateRaw === 0 ? 'Kapalı' : (gateRaw <= 12 ? 'Akıllı (Orta)' : 'Güçlü Kesim');
+      $('gainVal').textContent = `${gain}x`;
+      $('clarityVal').textContent = `+${clarity} dB`;
+      $('gateVal').textContent = gateRaw === 0 ? 'Kapalı' : (gateRaw <= 12 ? 'Akıllı (Orta)' : 'Güçlü Kesim');
 
-      const panTxt = pan === 0 ? 'Merkez' : (pan < 0 ? `Sol %${Math.round(Math.abs(pan)*100)}` : `Sağ %${Math.round(pan*100)}`);
-      document.getElementById('panVal').textContent = `${cutHz} Hz | ${panTxt}`;
+      const panTxt = pan === 0 ? 'Merkez' : (pan < 0 ? `Sol %${Math.round(Math.abs(pan) * 100)}` : `Sağ %${Math.round(pan * 100)}`);
+      $('panVal').textContent = `${cutHz} Hz | ${panTxt}`;
 
       if (gainNode) gainNode.gain.value = gain;
       if (highPass && mudCut) {
@@ -299,25 +282,21 @@
       }
       if (panner) panner.pan.value = pan;
 
-      // Odyogram ve Konuşma/Tiz filtrelerini güncelle
       if (audiogramFilters.length === 5) {
-        const isCustom = document.getElementById('p_custom').classList.contains('selected');
+        const isCustom = $('p_custom').classList.contains('selected');
         if (isCustom) {
-          audiogramFilters.forEach((f, idx) => { f.gain.value = customAudiogramGains[idx]; });
+          audiogramFilters.forEach((f, i) => { f.gain.value = customAudiogramGains[i] || 0; });
         } else {
-          audiogramFilters[0].gain.value = 0;                 // 500 Hz
-          audiogramFilters[1].gain.value = clarity * 0.4;     // 1000 Hz
-          audiogramFilters[2].gain.value = clarity * 0.85;    // 2000 Hz (Konuşma)
-          audiogramFilters[3].gain.value = clarity * 1.1;     // 4000 Hz (Harf Netliği)
-          audiogramFilters[4].gain.value = clarity * 0.9;     // 6000 Hz (Tiz)
+          audiogramFilters[0].gain.value = 0;
+          audiogramFilters[1].gain.value = clarity * 0.4;
+          audiogramFilters[2].gain.value = clarity * 0.85;
+          audiogramFilters[3].gain.value = clarity * 1.1;
+          audiogramFilters[4].gain.value = clarity * 0.9;
         }
       }
 
       if (workletNode) {
-        workletNode.port.postMessage({
-          type: 'config',
-          gateThreshold: gateRaw * 0.0005
-        });
+        workletNode.port.postMessage({ type: 'config', gateThreshold: gateRaw * 0.0005 });
       }
       saveSettings();
     }
@@ -330,81 +309,104 @@
       document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('selected'));
       btnEl.classList.add('selected');
 
-      if (name === 'crystal') {
-        gainSlider.value = 3.5; claritySlider.value = 11; gateSlider.value = 10; bassCutSlider.value = 180;
-      } else if (name === 'crowd') {
-        gainSlider.value = 3.0; claritySlider.value = 13; gateSlider.value = 18; bassCutSlider.value = 280;
-      } else if (name === 'natural') {
-        gainSlider.value = 3.0; claritySlider.value = 5; gateSlider.value = 6; bassCutSlider.value = 100;
-      } else if (name === 'whisper') {
-        gainSlider.value = 7.5; claritySlider.value = 15; gateSlider.value = 8; bassCutSlider.value = 200;
-      } else if (name === 'custom') {
-        statusText.textContent = "🩺 Kişisel 5 Bantlı Odyogram profiliniz uygulandı";
-      }
+      if (name === 'crystal') { gainSlider.value = 3.5; claritySlider.value = 11; gateSlider.value = 10; bassCutSlider.value = 180; }
+      else if (name === 'crowd') { gainSlider.value = 3.0; claritySlider.value = 13; gateSlider.value = 18; bassCutSlider.value = 280; }
+      else if (name === 'natural') { gainSlider.value = 3.0; claritySlider.value = 5; gateSlider.value = 6; bassCutSlider.value = 100; }
+      else if (name === 'whisper') { gainSlider.value = 7.5; claritySlider.value = 15; gateSlider.value = 8; bassCutSlider.value = 200; }
+      else if (name === 'custom') { statusText.textContent = '🩺 Kişisel 5 Bantlı Odyogram profiliniz uygulandı'; }
       updateUIValues();
     }
 
-    // --- OTOMATİK ÇINLAMA / ISLIK KESİCİ (ANTI-FEEDBACK NOTCH FILTER) ---
-    function startFeedbackHunter() {
-      const freqBins = new Uint8Array(analyser.frequencyBinCount);
-      feedbackInterval = setInterval(() => {
-        if (!analyser || !notchFilter || !audioCtx) return;
-        analyser.getByteFrequencyData(freqBins);
-
-        const binHz = audioCtx.sampleRate / analyser.fftSize;
-        const startBin = Math.floor(1200 / binHz);
-        const endBin = Math.min(freqBins.length - 1, Math.ceil(8000 / binHz));
-
-        let sum = 0, maxVal = 0, maxBin = 0;
-        for (let i = startBin; i <= endBin; i++) {
-          const val = freqBins[i];
-          sum += val;
-          if (val > maxVal) { maxVal = val; maxBin = i; }
-        }
-        const avg = sum / (endBin - startBin + 1);
-
-        // Eğer tek bir frekansta ortalamanın çok üzerinde sivri bir ıslık/çınlama varsa yakala
-        if (maxVal > 205 && (maxVal - avg) > 55) {
-          const howlFreq = maxBin * binHz;
-          notchFilter.frequency.setTargetAtTime(howlFreq, audioCtx.currentTime, 0.01);
-          notchFilter.Q.value = 14;
-          feedbackBadge.textContent = `🛡️ Çınlama Bastırıldı (${Math.round(howlFreq)} Hz)`;
-          feedbackBadge.className = 'pill warn';
-        } else {
-          feedbackBadge.textContent = `🛡️ Çınlama Koruması: Aktif`;
-          feedbackBadge.className = 'pill on';
-        }
-      }, 60);
+    // ===== MIKROFON LİSTESİ =====
+    async function populateMics() {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const saved = localStorage.getItem('ha2_mic') || '';
+        micSelect.innerHTML = '<option value="">Varsayılan (Telefon Mikrofonu)</option>';
+        devices.filter(d => d.kind === 'audioinput').forEach((d, i) => {
+          const o = document.createElement('option');
+          o.value = d.deviceId;
+          o.textContent = d.label || `Mikrofon ${i + 1}`;
+          micSelect.appendChild(o);
+        });
+        micSelect.value = [...micSelect.options].some(o => o.value === saved) ? saved : '';
+      } catch (e) { console.warn('Mikrofonlar listelenemedi', e); }
     }
 
-    // --- SON 8 SANİYEYİ TEKRAR DİNLEME (INSTANT REPLAY) ---
-    function triggerInstantReplay() {
-      if (!workletNode || !audioCtx) return;
-      if (replaySource) {
-        try { replaySource.stop(); } catch(e){}
-        replaySource = null;
-        workletNode.port.postMessage({ type: 'setReplaying', value: false });
-        replayBtn.textContent = "⏪ Son 8 Sn";
-        replayBtn.className = "ready";
-        return;
-      }
-      workletNode.port.postMessage({ type: 'getReplay' });
-    }
+    micSelect.onchange = async () => {
+      saveSettings();
+      if (engineRunning) { await stopEngine(); await startEngine(); }
+    };
 
-    function playReplayBuffer(floatArray) {
-      if (!audioCtx) return;
-      workletNode.port.postMessage({ type: 'setReplaying', value: true });
-      const buf = audioCtx.createBuffer(1, floatArray.length, audioCtx.sampleRate);
-      buf.getChannelData(0).set(floatArray);
+    // ===== SES MOTORU =====
+    async function startEngine() {
+      if (engineRunning) return;
+      mainBtn.disabled = true;
+      statusText.textContent = 'Başlatılıyor...';
+      try {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
+        const url = URL.createObjectURL(new Blob([workletProcessorCode], { type: 'application/javascript' }));
+        await audioCtx.audioWorklet.addModule(url);
+        URL.revokeObjectURL(url);
 
-      replaySource = audioCtx.createBufferSource();
-      replaySource.buffer = buf;
-      replaySource.playbackRate.value = 0.92; // Kelimelerin daha net anlaşılması için %8 yavaşlatılmış
-      replaySource.connect(panner);
+        const audioConstraints = { echoCancellation: true, noiseSuppression: false, autoGainControl: false };
+        if (micSelect.value) audioConstraints.deviceId = { exact: micSelect.value };
+        stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
 
-      replayBtn.textContent = "🔊 Dinleniyor...";
-      replayBtn.className = "playing";
+        srcNode = audioCtx.createMediaStreamSource(stream);
 
-      replaySource.onended = () => {
-        replaySource = null;
-        if (workletNode) w
+        highPass = audioCtx.createBiquadFilter();
+        highPass.type = 'highpass';
+
+        mudCut = audioCtx.createBiquadFilter();
+        mudCut.type = 'peaking';
+        mudCut.frequency.value = 250;
+        mudCut.Q.value = 1;
+
+        notchFilter = audioCtx.createBiquadFilter();
+        notchFilter.type = 'notch';
+        notchFilter.frequency.value = 8000;
+        notchFilter.Q.value = 1;
+
+        audiogramFilters = AUDIOGRAM_FREQS.map(f => {
+          const b = audioCtx.createBiquadFilter();
+          b.type = 'peaking';
+          b.frequency.value = f;
+          b.Q.value = 1.2;
+          b.gain.value = 0;
+          return b;
+        });
+
+        workletNode = new AudioWorkletNode(audioCtx, 'hearing-aid-processor', {
+          numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1]
+        });
+        workletNode.port.onmessage = e => {
+          if (e.data.type === 'replayBuffer') playReplayBuffer(e.data.buffer);
+        };
+
+        gainNode = audioCtx.createGain();
+        panner = audioCtx.createStereoPanner();
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 2048;
+
+        const chain = [highPass, mudCut, notchFilter, ...audiogramFilters, workletNode, gainNode, panner, analyser];
+        let node = srcNode;
+        chain.forEach(n => { node.connect(n); node = n; });
+        analyser.connect(audioCtx.destination);
+
+        engineRunning = true;
+        updateUIValues();
+        startFeedbackHunter();
+
+        replayBtn.className = 'ready';
+        mainBtn.textContent = 'Durdur';
+        mainBtn.classList.add('active');
+        statusText.textContent = 'Dinleniyor';
+
+        try { wakeLock = await navigator.wakeLock?.request('screen'); } catch (e) {}
+        await populateMics();
+      } catch (err) {
+        console.error(err);
+        statusText.textContent = 'Hata: ' + err.message;
+        await stopEngine();
+  
