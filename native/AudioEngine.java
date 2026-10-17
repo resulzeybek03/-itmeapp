@@ -3,25 +3,28 @@ package com.hdklinik.isitme;
 import android.content.Context;
 import android.media.AudioAttributes;
 import android.media.AudioDeviceInfo;
-import android.os.Build;
 import android.media.AudioFormat;
 import android.media.AudioManager;
 import android.media.AudioRecord;
 import android.media.AudioTrack;
 import android.media.MediaRecorder;
+import android.os.Build;
 
 import org.json.JSONObject;
 
 /**
- * Ses motoru: mikrofon -> sessizlik kapısı -> filtreler -> kompresör -> kazanç -> sınırlayıcı -> kulaklık.
- * WebView'dan bağımsız çalışır; uygulama arka plana atılsa da foreground servis içinde devam eder.
+ * Ses motoru: mikrofon -> sessizlik kapısı -> ton filtreleri -> çok bantlı sıkıştırma
+ * -> uzak ses yükseltme -> kazanç -> sınırlayıcı -> kulaklık.
  */
 public class AudioEngine {
 
   public interface Listener {
     void onGate(boolean open);
-    void onLevel(float level);
+    void onLevel(float level);        // çıkış seviyesi
+    void onInputLevel(float level);   // giriş seviyesi (kapı öncesi, kalibrasyon için)
     void onError(String message);
+    void onStopped(String reason);    // user | unplug | focus | error
+    void onLatency(float ms);
   }
 
   private static final AudioEngine INSTANCE = new AudioEngine();
@@ -29,12 +32,17 @@ public class AudioEngine {
 
   private static final int SR = 48000;
   private static final int BLOCK = 128;
-  private static final float LIMIT_DB = -6f;   // Güvenlik sınırı (dBFS)
-  private static final float MAX_OUT = 0.5f;   // Son güvenlik tavanı
+  private static final float LIMIT_DB = -6f;
+  private static final float MAX_OUT = 0.5f;
+
+  private static Context appCtx;
+  private AudioManager audioMgr;
+  private AudioManager.OnAudioFocusChangeListener focusListener;
 
   private volatile Listener listener;
   private volatile boolean running = false;
   private volatile boolean filtersDirty = true;
+  private volatile String stopReason = "user";
   private Thread thread;
 
   // Ayarlar (JS'den gelir)
@@ -45,7 +53,7 @@ public class AudioEngine {
   private volatile float trebleDb = 10f;
   private volatile float cutHz = 180f;
   private volatile float pan = 0f;
-  private volatile float far = 0.5f;   // Uzak ses yükseltme (0-1)
+  private volatile float far = 0.5f;
 
   // DSP durumu (yalnızca ses thread'i kullanır)
   private float thOpen, thClose, floorG;
@@ -53,15 +61,16 @@ public class AudioEngine {
   private boolean gateOpen = false;
   private int hold = 0;
   private final int holdN = (int) (0.35 * SR);
-  private float cEnv = 0f, cGain = 1f;
-  private float uGain = 1f;
-  private float lEnv = 0f, lGain = 1f;
+  private float oEnv = 0f, uGain = 1f, lEnv = 0f, lGain = 1f;
   private final Biquad hp = new Biquad(), mud = new Biquad(), mid = new Biquad(), treble = new Biquad();
+  private final Biquad xLoLp = new Biquad(), xMidHp = new Biquad(), xMidLp = new Biquad(), xHiHp = new Biquad();
+  private final float[] bEnv = new float[3];
+  private final float[] bGain = {1f, 1f, 1f};
 
   private final float eAtt = coef(0.002f), eRel = coef(0.12f);
   private final float gAtt = coef(0.002f), gRel = coef(0.25f);
-  private final float uAtt = coef(0.05f), uRel = coef(0.3f);
   private final float cAtt = coef(0.004f), cRel = coef(0.15f);
+  private final float uAtt = coef(0.05f), uRel = coef(0.3f);
   private final float lAtt = coef(0.001f), lRel = coef(0.10f);
 
   private static float coef(float seconds) {
@@ -70,7 +79,6 @@ public class AudioEngine {
 
   public void setListener(Listener l) { listener = l; }
 
-  private static Context appCtx;
   public void setContext(Context c) { appCtx = c.getApplicationContext(); }
 
   public boolean isRunning() { return running; }
@@ -103,8 +111,6 @@ public class AudioEngine {
       return false;
     }
 
-    AudioRecord rec;
-    AudioTrack track;
     int recBuf = Math.max(inMin, BLOCK * 4) * 2;
     int trBuf = Math.max(outMin, BLOCK * 4 * 2 * 2);
     AudioAttributes attrs = new AudioAttributes.Builder()
@@ -121,9 +127,11 @@ public class AudioEngine {
         .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
         .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
         .build();
+
+    AudioRecord rec;
+    AudioTrack track;
     try {
       if (Build.VERSION.SDK_INT >= 26) {
-        // Küçük tamponlar: giriş tarafı düşük gecikmeli, çıkış LOW_LATENCY modunda
         rec = new AudioRecord.Builder()
             .setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
             .setAudioFormat(inFmt)
@@ -168,12 +176,20 @@ public class AudioEngine {
     }
 
     env = 0f; gateG = 0f; gateOpen = false; hold = 0;
-    cEnv = 0f; cGain = 1f; uGain = 1f; lEnv = 0f; lGain = 1f;
+    oEnv = 0f; uGain = 1f; lEnv = 0f; lGain = 1f;
+    java.util.Arrays.fill(bEnv, 0f);
+    java.util.Arrays.fill(bGain, 1f);
     filtersDirty = true;
+    stopReason = "user";
     running = true;
+
+    // Tahmini gecikme: giriş ve çıkış tamponlarının toplamı
+    float estMs = ((recBuf / 2f) + (trBuf / 4f)) / SR * 1000f;
+    emitLatency(estMs);
 
     rec.startRecording();
     track.play();
+    requestFocus();
 
     thread = new Thread(() -> loop(rec, track), "ses-motoru");
     thread.setPriority(Thread.MAX_PRIORITY);
@@ -181,8 +197,20 @@ public class AudioEngine {
     return true;
   }
 
+  /** Kullanıcı durdurdu */
   public void stop() {
+    stopReason = "user";
     running = false;
+    joinThread();
+  }
+
+  /** Sistem ya da olay nedeniyle durdur (kulaklık çıkarıldı, ses odağı kaybı vb.) */
+  public void requestStop(String reason) {
+    stopReason = reason;
+    running = false;
+  }
+
+  private void joinThread() {
     Thread t = thread;
     thread = null;
     if (t != null && t != Thread.currentThread()) {
@@ -190,25 +218,52 @@ public class AudioEngine {
     }
   }
 
+  private void requestFocus() {
+    if (appCtx == null) return;
+    audioMgr = (AudioManager) appCtx.getSystemService(Context.AUDIO_SERVICE);
+    if (audioMgr == null) return;
+    focusListener = change -> {
+      // Arama ya da başka bir uygulama sesi aldığında otomatik durdur, kullanıcı tekrar başlatır
+      if (change == AudioManager.AUDIOFOCUS_LOSS || change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) {
+        requestStop("focus");
+      }
+    };
+    audioMgr.requestAudioFocus(focusListener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT);
+  }
+
+  private void releaseFocus() {
+    if (audioMgr != null && focusListener != null) {
+      audioMgr.abandonAudioFocus(focusListener);
+    }
+    focusListener = null;
+    audioMgr = null;
+  }
+
   private void loop(AudioRecord rec, AudioTrack track) {
     short[] in = new short[BLOCK];
     short[] out = new short[BLOCK * 2];
     long lastLevel = 0;
-    float peak = 0f;
+    float outPeak = 0f, inPeak = 0f;
     try {
-      rec.startRecording();
       while (running) {
         int n = rec.read(in, 0, BLOCK);
-        if (n < 0) { emitError("Mikrofon okuma hatası: " + n); break; }
+        if (n < 0) {
+          emitError("Mikrofon okuma hatası: " + n);
+          stopReason = "error";
+          break;
+        }
         if (n == 0) continue;
         if (filtersDirty) { computeParams(); filtersDirty = false; }
 
         float bl = pan > 0 ? 1f - pan : 1f;
         float br = pan < 0 ? 1f + pan : 1f;
         for (int i = 0; i < n; i++) {
-          float x = processSample(in[i] / 32768f);
+          float raw = in[i] / 32768f;
+          float ia = Math.abs(raw);
+          if (ia > inPeak) inPeak = ia;
+          float x = processSample(raw);
           float a = Math.abs(x);
-          if (a > peak) peak = a;
+          if (a > outPeak) outPeak = a;
           out[2 * i] = toShort(x * bl);
           out[2 * i + 1] = toShort(x * br);
         }
@@ -216,8 +271,10 @@ public class AudioEngine {
 
         long now = System.currentTimeMillis();
         if (now - lastLevel > 100) {
-          emitLevel(peak);
-          peak = 0f;
+          emitInputLevel(inPeak);
+          emitLevel(outPeak);
+          inPeak = 0f;
+          outPeak = 0f;
           lastLevel = now;
         }
       }
@@ -227,6 +284,8 @@ public class AudioEngine {
       try { track.stop(); } catch (Exception ignored) {}
       rec.release();
       track.release();
+      releaseFocus();
+      emitStopped(stopReason);
     }
   }
 
@@ -235,13 +294,17 @@ public class AudioEngine {
     mud.peaking(320, cutHz > 150 ? -6 : -2, 1.1);
     mid.peaking(2400, midDb, 0.9);
     treble.peaking(4500, trebleDb, 0.8);
+    xLoLp.lowpass(500, 0.5);
+    xMidHp.highpass(500, 0.5);
+    xMidLp.lowpass(3000, 0.5);
+    xHiHp.highpass(3000, 0.5);
     thOpen = (float) Math.pow(10, gateDb / 20.0);
     thClose = (float) Math.pow(10, (gateDb - 10) / 20.0);
     floorG = muteFully ? 0f : 0.01f;
   }
 
   private float processSample(float x) {
-    // 1) Sessizlik kapısı (histerezis + tutma süresi + yumuşak geçiş)
+    // 1) Sessizlik kapısı
     float a = Math.abs(x);
     env += (a - env) * (a > env ? eAtt : eRel);
     boolean was = gateOpen;
@@ -262,29 +325,29 @@ public class AudioEngine {
     x = mid.process(x);
     x = treble.process(x);
 
-    // 3) Kompresör (-32 dB eşik, 4:1)
-    a = Math.abs(x);
-    cEnv += (a - cEnv) * (a > cEnv ? cAtt : cRel);
-    float lvl = 20f * (float) Math.log10(cEnv + 1e-9f);
-    float cTarget = 1f;
-    if (lvl > -32f) {
-      float gDb = -(lvl + 32f) * 0.75f;
-      cTarget = (float) Math.pow(10, gDb / 20.0);
-    }
-    cGain += (cTarget - cGain) * (cTarget < cGain ? cAtt : cRel);
-    x *= cGain;
+    // 3) Çok bantlı sıkıştırma (düşük / orta / yüksek)
+    float lo = xLoLp.process(x);
+    float md = xMidLp.process(xMidHp.process(x));
+    float hi = xHiHp.process(x);
+    lo *= bandGain(0, lo);
+    md *= bandGain(1, md);
+    hi *= bandGain(2, hi);
+    x = lo + md + hi;
 
-    // Uzak / düşük ses yükseltme: konuşma açıkken kısık sesleri yukarı çeker
+    // 4) Uzak / düşük ses yükseltme (konuşma açıkken)
+    a = Math.abs(x);
+    oEnv += (a - oEnv) * (a > oEnv ? cAtt : cRel);
+    float lvl = 20f * (float) Math.log10(oEnv + 1e-9f);
     float uDb = 0f;
     if (far > 0f && gateOpen && lvl < -32f) uDb = Math.min(12f, (-32f - lvl) * far);
     float uTarget = (float) Math.pow(10, uDb / 20.0);
     uGain += (uTarget - uGain) * (uTarget > uGain ? uAtt : uRel);
     x *= uGain;
 
-    // 4) Kazanç
+    // 5) Kazanç
     x *= gain;
 
-    // 5) Sınırlayıcı
+    // 6) Sınırlayıcı
     a = Math.abs(x);
     lEnv += (a - lEnv) * (a > lEnv ? lAtt : lRel);
     float lvl2 = 20f * (float) Math.log10(lEnv + 1e-9f);
@@ -296,10 +359,21 @@ public class AudioEngine {
     lGain += (lTarget - lGain) * (lTarget < lGain ? lAtt : lRel);
     x *= lGain;
 
-    // 6) Son tavan
+    // 7) Son tavan
     if (x > MAX_OUT) x = MAX_OUT;
     else if (x < -MAX_OUT) x = -MAX_OUT;
     return x;
+  }
+
+  /** Bant başına 3:1 sıkıştırma, eşik -32 dB */
+  private float bandGain(int b, float s) {
+    float a = Math.abs(s);
+    bEnv[b] += (a - bEnv[b]) * (a > bEnv[b] ? cAtt : cRel);
+    float lvl = 20f * (float) Math.log10(bEnv[b] + 1e-9f);
+    float t = 1f;
+    if (lvl > -32f) t = (float) Math.pow(10, -(lvl + 32f) * (2f / 3f) / 20.0);
+    bGain[b] += (t - bGain[b]) * (t < bGain[b] ? cAtt : cRel);
+    return bGain[b];
   }
 
   private static short toShort(float f) {
@@ -308,20 +382,12 @@ public class AudioEngine {
     return (short) (f * 32767f);
   }
 
-  private void emitGate(boolean open) {
-    Listener l = listener;
-    if (l != null) l.onGate(open);
-  }
-
-  private void emitLevel(float level) {
-    Listener l = listener;
-    if (l != null) l.onLevel(level);
-  }
-
-  private void emitError(String msg) {
-    Listener l = listener;
-    if (l != null) l.onError(msg);
-  }
+  private void emitGate(boolean open) { Listener l = listener; if (l != null) l.onGate(open); }
+  private void emitLevel(float v) { Listener l = listener; if (l != null) l.onLevel(v); }
+  private void emitInputLevel(float v) { Listener l = listener; if (l != null) l.onInputLevel(v); }
+  private void emitError(String m) { Listener l = listener; if (l != null) l.onError(m); }
+  private void emitStopped(String r) { Listener l = listener; if (l != null) l.onStopped(r); }
+  private void emitLatency(float ms) { Listener l = listener; if (l != null) l.onLatency(ms); }
 
   /** RBJ biquad filtresi */
   private static class Biquad {
@@ -332,6 +398,13 @@ public class AudioEngine {
       double w = 2 * Math.PI * f / SR, c = Math.cos(w), al = Math.sin(w) / (2 * q);
       double a0 = 1 + al;
       b0 = (1 + c) / 2 / a0; b1 = -(1 + c) / a0; b2 = (1 + c) / 2 / a0;
+      a1 = -2 * c / a0; a2 = (1 - al) / a0;
+    }
+
+    void lowpass(double f, double q) {
+      double w = 2 * Math.PI * f / SR, c = Math.cos(w), al = Math.sin(w) / (2 * q);
+      double a0 = 1 + al;
+      b0 = (1 - c) / 2 / a0; b1 = (1 - c) / a0; b2 = (1 - c) / 2 / a0;
       a1 = -2 * c / a0; a2 = (1 - al) / a0;
     }
 

@@ -45,11 +45,41 @@ public class ForegroundAudioPlugin extends Plugin {
       }
 
       @Override
+      public void onInputLevel(final float level) {
+        main.post(() -> {
+          JSObject o = new JSObject();
+          o.put("level", (double) level);
+          notifyListeners("inLevel", o);
+        });
+      }
+
+      @Override
       public void onError(final String message) {
         main.post(() -> {
           JSObject o = new JSObject();
           o.put("message", message);
           notifyListeners("error", o);
+        });
+      }
+
+      @Override
+      public void onStopped(final String reason) {
+        main.post(() -> {
+          JSObject o = new JSObject();
+          o.put("reason", reason);
+          notifyListeners("stopped", o);
+          try {
+            getContext().stopService(new Intent(getContext(), ForegroundAudioService.class));
+          } catch (Exception ignored) {}
+        });
+      }
+
+      @Override
+      public void onLatency(final float ms) {
+        main.post(() -> {
+          JSObject o = new JSObject();
+          o.put("ms", (double) ms);
+          notifyListeners("latency", o);
         });
       }
     });
