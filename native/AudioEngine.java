@@ -1,6 +1,9 @@
 package com.hdklinik.isitme;
 
+import android.content.Context;
 import android.media.AudioAttributes;
+import android.media.AudioDeviceInfo;
+import android.os.Build;
 import android.media.AudioFormat;
 import android.media.AudioManager;
 import android.media.AudioRecord;
@@ -67,6 +70,9 @@ public class AudioEngine {
 
   public void setListener(Listener l) { listener = l; }
 
+  private static Context appCtx;
+  public void setContext(Context c) { appCtx = c.getApplicationContext(); }
+
   public boolean isRunning() { return running; }
 
   public void setParams(String json) {
@@ -118,6 +124,19 @@ public class AudioEngine {
     } catch (Exception e) {
       emitError("Ses motoru oluşturulamadı: " + e.getMessage());
       return false;
+    }
+
+    // Kablolu kulaklığın mikrofonu yerine telefonun kendi mikrofonunu kullan
+    if (appCtx != null && Build.VERSION.SDK_INT >= 23) {
+      AudioManager am = (AudioManager) appCtx.getSystemService(Context.AUDIO_SERVICE);
+      if (am != null) {
+        for (AudioDeviceInfo d : am.getDevices(AudioManager.GET_DEVICES_INPUTS)) {
+          if (d.getType() == AudioDeviceInfo.TYPE_BUILTIN_MIC) {
+            rec.setPreferredDevice(d);
+            break;
+          }
+        }
+      }
     }
 
     if (rec.getState() != AudioRecord.STATE_INITIALIZED || track.getState() != AudioTrack.STATE_INITIALIZED) {
