@@ -123,12 +123,11 @@ public class AudioEngine {
         .build();
     try {
       if (Build.VERSION.SDK_INT >= 26) {
-        // Düşük gecikme modu: küçük tamponlar, hızlı işleme
+        // Küçük tamponlar: giriş tarafı düşük gecikmeli, çıkış LOW_LATENCY modunda
         rec = new AudioRecord.Builder()
             .setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
             .setAudioFormat(inFmt)
             .setBufferSizeInBytes(recBuf)
-            .setPerformanceMode(AudioRecord.PERFORMANCE_MODE_LOW_LATENCY)
             .build();
         track = new AudioTrack.Builder()
             .setAudioAttributes(attrs)
