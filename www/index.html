@@ -23,14 +23,24 @@
     .label-row { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 5px; color: #d1d5db; gap: 8px; }
     .val-badge { color: #00e676; font-weight: bold; white-space: nowrap; }
     input[type="range"] { width: 100%; accent-color: #00e676; }
+    input[type="text"], textarea { width: 100%; padding: 9px; border-radius: 9px; background: #252a34; color: #fff; border: 1px solid #3a4150; font-size: 13px; }
+    textarea { min-height: 90px; font-family: monospace; }
     .checkbox-row { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; color: #ccc; margin: 8px 0; }
     .checkbox-row input { width: 17px; height: 17px; accent-color: #00e676; }
     .meter-container { width: 100%; height: 8px; background: #252a34; border-radius: 6px; overflow: hidden; margin-top: 14px; }
     .meter-bar { height: 100%; width: 0%; background: linear-gradient(90deg, #00e676, #ffeb3b, #ff5252); }
     #mainBtn { width: 100%; padding: 16px; font-size: 17px; border-radius: 14px; border: none; background: #00e676; color: #000; font-weight: bold; cursor: pointer; margin-top: 14px; }
     #mainBtn.active { background: #ff5252; color: #fff; }
-    .btn-secondary { width: 100%; padding: 13px; font-size: 14px; border-radius: 12px; border: 1px solid #3a4150; background: #252a34; color: #fff; cursor: pointer; margin-top: 10px; }
+    .btn-secondary { width: 100%; padding: 12px; font-size: 14px; border-radius: 12px; border: 1px solid #3a4150; background: #252a34; color: #fff; cursor: pointer; margin-top: 8px; }
+    .btn-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+    .btn-row .btn-secondary { margin-top: 0; }
+    .btn-small { padding: 8px 10px; font-size: 13px; border-radius: 9px; border: 1px solid #3a4150; background: #252a34; color: #fff; cursor: pointer; }
+    .btn-small.danger { color: #ff8a80; }
+    .prow { display: flex; gap: 6px; margin-top: 6px; }
+    .prow .btn-small:first-child { flex: 1; }
+    .small { font-size: 12px; color: #8b929e; margin-top: 6px; line-height: 1.4; }
     .status { font-size: 12px; color: #8b929e; text-align: center; margin-top: 10px; min-height: 16px; }
+    .latency { font-size: 12px; color: #9aa0a6; text-align: center; margin-top: 4px; min-height: 16px; }
     .tip { font-size: 11.5px; color: #ffb74d; background: #2a2015; padding: 9px; border-radius: 8px; margin-top: 12px; line-height: 1.4; }
   </style>
 </head>
@@ -49,6 +59,11 @@
       <button class="preset-btn" data-preset="natural">🌿 Doğal & TV</button>
       <button class="preset-btn" data-preset="whisper">👂 Uzak / Fısıltı</button>
     </div>
+
+    <div class="section">Ortam Kalibrasyonu</div>
+    <div class="small">Telefonu normal kullanacağın yere koy ve 3 saniye sessiz kal. Sessizlik kapısı, ortamın gürültü seviyesine göre ayarlanır.</div>
+    <button id="calBtn" class="btn-secondary">Ortamı ölç</button>
+    <div id="calStatus" class="small"></div>
 
     <div class="section">Sessizlik Kapısı</div>
     <div class="control">
@@ -78,20 +93,32 @@
       <div class="label-row"><span>Kulak dengesi:</span><span id="panVal" class="val-badge">Merkez</span></div>
       <input type="range" id="panSlider" min="-1" max="1" step="0.1" value="0">
     </div>
-
     <div class="control">
       <div class="label-row"><span>Uzak ses yükseltme:</span><span id="farVal" class="val-badge">50%</span></div>
       <input type="range" id="farSlider" min="0" max="1" step="0.1" value="0.5">
     </div>
 
+    <div class="section">Profillerim</div>
+    <div class="btn-row">
+      <input type="text" id="profileName" placeholder="Profil adı">
+      <button id="saveProfileBtn" class="btn-secondary">Kaydet</button>
+    </div>
+    <div id="profileList"></div>
+    <div class="btn-row">
+      <button id="exportBtn" class="btn-secondary">Dışa aktar</button>
+      <button id="importBtn" class="btn-secondary">İçe aktar</button>
+    </div>
+    <textarea id="io" placeholder="Dışa aktarılan profiller burada görünür. İçe aktarmak için JSON'u buraya yapıştır."></textarea>
+
     <div class="meter-container"><div id="meterBar" class="meter-bar"></div></div>
 
     <button id="mainBtn">Başlat</button>
     <div id="status" class="status">Hazır</div>
+    <div id="latency" class="latency"></div>
     <button id="batteryBtn" class="btn-secondary">Pil kısıtlamasını kaldır</button>
 
     <div class="tip">
-      <strong>Önemli:</strong> Bu uygulama tıbbi bir işitme cihazı değildir. Kulaklıkla yüksek sesle uzun süre dinlemeyin. Ses doğrudan telefonun mikrofonundan alınır; Bluetooth kulaklığın mikrofonu kullanılmaz.
+      <strong>Önemli:</strong> Bu uygulama tıbbi bir işitme cihazı değildir. Kulaklıkla yüksek sesle uzun süre dinlemeyin. Kulaklık çıkarılırsa ya da telefona arama gelirse ses otomatik olarak durur.
     </div>
   </div>
 
@@ -99,14 +126,16 @@
   const $ = id => document.getElementById(id);
   const FG = () => window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.ForegroundAudio;
   const SLIDERS = ['gateSlider', 'gainSlider', 'midSlider', 'trebleSlider', 'bassCutSlider', 'panSlider', 'farSlider'];
-  const STORE = 'ses_yardimcisi_v5';
-  let running = false;
+  const STORE = 'ses_yardimcisi_v11';
+  const PROFILE_KEY = 'ses_profiller_v11';
+  const LONG_MS = 60 * 60 * 1000;
+  let running = false, startedAt = 0, warnedLong = false, calibrating = null;
 
   const PRESETS = {
-    crystal: { gate: -44, gain: 3, mid: 8,  treble: 10, cut: 180, far: 0.5 },
-    crowd:   { gate: -38, gain: 3, mid: 12, treble: 8,  cut: 280, far: 0.4 },
-    natural: { gate: -50, gain: 3, mid: 3,  treble: 5,  cut: 100, far: 0.2, mute: false },
-    whisper: { gate: -54, gain: 5, mid: 10, treble: 12, cut: 200, far: 0.8 }
+    crystal: { gate: -44, gain: 3, mid: 8,  treble: 10, cut: 180, pan: 0, far: 0.5, muteFully: true },
+    crowd:   { gate: -38, gain: 3, mid: 12, treble: 8,  cut: 280, pan: 0, far: 0.4, muteFully: true },
+    natural: { gate: -50, gain: 3, mid: 3,  treble: 5,  cut: 100, pan: 0, far: 0.2, muteFully: false },
+    whisper: { gate: -54, gain: 5, mid: 10, treble: 12, cut: 200, pan: 0, far: 0.8, muteFully: true }
   };
 
   function params() {
@@ -129,32 +158,36 @@
     $('midVal').textContent = '+' + p.mid + ' dB';
     $('trebleVal').textContent = '+' + p.treble + ' dB';
     $('bassCutVal').textContent = (p.cut <= 110 ? 'Hafif' : p.cut <= 220 ? 'Orta' : 'Güçlü') + ' (' + p.cut + ' Hz)';
-    $('farVal').textContent = Math.round(p.far * 100) + '%';
     $('panVal').textContent = p.pan === 0 ? 'Merkez' : (p.pan < 0 ? 'Sol %' : 'Sağ %') + Math.round(Math.abs(p.pan) * 100);
+    $('farVal').textContent = Math.round(p.far * 100) + '%';
   }
 
   function save() {
-    const s = { muteFully: $('muteFully').checked };
-    SLIDERS.forEach(id => s[id] = $(id).value);
-    try { localStorage.setItem(STORE, JSON.stringify(s)); } catch (e) {}
+    try { localStorage.setItem(STORE, JSON.stringify(params())); } catch (e) {}
   }
 
   function load() {
     try {
       const s = JSON.parse(localStorage.getItem(STORE) || 'null');
-      if (!s) return;
-      SLIDERS.forEach(id => { if (s[id] !== undefined) $(id).value = s[id]; });
-      $('muteFully').checked = !!s.muteFully;
+      if (s) applyValues(s, true);
     } catch (e) {}
   }
 
+  function applyValues(p, silent) {
+    $('gateSlider').value = p.gate;
+    $('gainSlider').value = p.gain;
+    $('midSlider').value = p.mid;
+    $('trebleSlider').value = p.treble;
+    $('bassCutSlider').value = p.cut;
+    $('panSlider').value = p.pan !== undefined ? p.pan : 0;
+    $('farSlider').value = p.far !== undefined ? p.far : 0.5;
+    $('muteFully').checked = p.muteFully !== undefined ? p.muteFully : true;
+    if (!silent) onChange(); else updateLabels();
+  }
+
   function applyPreset(name) {
-    const p = PRESETS[name];
-    $('gateSlider').value = p.gate; $('gainSlider').value = p.gain; $('midSlider').value = p.mid;
-    $('trebleSlider').value = p.treble; $('bassCutSlider').value = p.cut; $('panSlider').value = 0; $('farSlider').value = p.far;
-    $('muteFully').checked = p.mute !== false;
+    applyValues(PRESETS[name]);
     document.querySelectorAll('.preset-btn').forEach(b => b.classList.toggle('selected', b.dataset.preset === name));
-    onChange();
   }
 
   function onChange() {
@@ -167,6 +200,57 @@
   $('muteFully').addEventListener('change', onChange);
   document.querySelectorAll('.preset-btn').forEach(b => b.addEventListener('click', () => applyPreset(b.dataset.preset)));
 
+  // ---- Profiller ----
+  function getProfiles() {
+    try { return JSON.parse(localStorage.getItem(PROFILE_KEY) || '{}'); } catch (e) { return {}; }
+  }
+  function setProfiles(o) {
+    try { localStorage.setItem(PROFILE_KEY, JSON.stringify(o)); } catch (e) {}
+    renderProfiles();
+  }
+  function renderProfiles() {
+    const o = getProfiles();
+    const names = Object.keys(o);
+    const list = $('profileList');
+    list.innerHTML = '';
+    if (!names.length) { list.innerHTML = '<div class="small">Henüz kayıtlı profil yok.</div>'; return; }
+    names.forEach(name => {
+      const row = document.createElement('div');
+      row.className = 'prow';
+      const load = document.createElement('button');
+      load.className = 'btn-small';
+      load.textContent = name;
+      load.onclick = () => applyValues(o[name]);
+      const del = document.createElement('button');
+      del.className = 'btn-small danger';
+      del.textContent = 'Sil';
+      del.onclick = () => { const x = getProfiles(); delete x[name]; setProfiles(x); };
+      row.appendChild(load);
+      row.appendChild(del);
+      list.appendChild(row);
+    });
+  }
+  $('saveProfileBtn').onclick = () => {
+    const name = $('profileName').value.trim();
+    if (!name) { $('status').textContent = 'Önce bir profil adı yaz.'; return; }
+    const o = getProfiles();
+    o[name] = params();
+    setProfiles(o);
+    $('profileName').value = '';
+    $('status').textContent = '"' + name + '" profili kaydedildi.';
+  };
+  $('exportBtn').onclick = () => { $('io').value = JSON.stringify(getProfiles(), null, 2); };
+  $('importBtn').onclick = () => {
+    try {
+      const incoming = JSON.parse($('io').value);
+      setProfiles(Object.assign(getProfiles(), incoming));
+      $('status').textContent = 'Profiller içe aktarıldı.';
+    } catch (e) {
+      $('status').textContent = 'JSON okunamadı.';
+    }
+  };
+
+  // ---- Durum ----
   function setGate(open) {
     $('gateBadge').textContent = open ? '🔊 Ses geçiyor' : '🔇 Sessiz';
     $('gateBadge').className = 'pill' + (open ? ' open' : '');
@@ -179,25 +263,10 @@
     if (!on) { setGate(false); $('meterBar').style.width = '0%'; }
   }
 
-  function attachListeners() {
-    const p = FG();
-    if (!p) return;
-    p.addListener('gate', d => setGate(d.open));
-    p.addListener('level', d => { $('meterBar').style.width = Math.min(100, d.level * 200) + '%'; });
-    p.addListener('error', d => { $('status').textContent = 'Hata: ' + d.message; setRunning(false); });
-  }
-
-  $('mainBtn').addEventListener('click', async () => {
+  async function startEngine() {
     const p = FG();
     if (!p) { $('status').textContent = 'Bu ekran yalnızca Android uygulamasında çalışır.'; return; }
-    if (running) {
-      await p.stop();
-      setRunning(false);
-      $('status').textContent = 'Durduruldu';
-      return;
-    }
     try {
-      // Mikrofon izni için WebView üzerinden bir kez iste, sonra bırak
       const s = await navigator.mediaDevices.getUserMedia({ audio: true });
       s.getTracks().forEach(t => t.stop());
     } catch (e) {
@@ -207,11 +276,74 @@
     try {
       await p.start(params());
       setRunning(true);
+      startedAt = Date.now();
+      warnedLong = false;
       $('status').textContent = 'Aktif · Arka planda çalışabilir';
     } catch (e) {
       $('status').textContent = 'Başlatılamadı: ' + (e && e.message ? e.message : e);
     }
+  }
+
+  async function stopEngine(text) {
+    const p = FG();
+    if (p) await p.stop().catch(() => {});
+    setRunning(false);
+    $('status').textContent = text || 'Durduruldu';
+  }
+
+  $('mainBtn').addEventListener('click', () => running ? stopEngine() : startEngine());
+
+  // ---- Ortam kalibrasyonu ----
+  $('calBtn').addEventListener('click', async () => {
+    if (!running) {
+      await startEngine();
+      if (!running) return;
+    }
+    calibrating = [];
+    $('calStatus').textContent = '3 saniye sessiz kal...';
+    setTimeout(() => {
+      const vals = calibrating || [];
+      calibrating = null;
+      if (vals.length < 5) { $('calStatus').textContent = 'Yeterli veri alınamadı, tekrar dene.'; return; }
+      vals.sort((a, b) => a - b);
+      const med = vals[Math.floor(vals.length / 2)];
+      const noiseDb = 20 * Math.log10(med + 1e-9);
+      let gate = Math.round(noiseDb + 10);
+      gate = Math.max(-60, Math.min(-20, gate));
+      $('gateSlider').value = gate;
+      onChange();
+      $('calStatus').textContent = 'Ortam gürültüsü yaklaşık ' + Math.round(noiseDb) + ' dB. Sessizlik kapısı ' + gate + ' dB olarak ayarlandı.';
+    }, 3000);
   });
+
+  // ---- Olaylar ----
+  function attachListeners() {
+    const p = FG();
+    if (!p) return;
+    p.addListener('gate', d => setGate(d.open));
+    p.addListener('level', d => { $('meterBar').style.width = Math.min(100, d.level * 200) + '%'; });
+    p.addListener('inLevel', d => { if (calibrating) calibrating.push(d.level); });
+    p.addListener('latency', d => { $('latency').textContent = 'Tahmini gecikme: ' + Math.round(d.ms) + ' ms'; });
+    p.addListener('error', d => { $('status').textContent = 'Hata: ' + d.message; setRunning(false); });
+    p.addListener('stopped', d => {
+      const texts = {
+        unplug: 'Kulaklık çıkarıldığı için durduruldu.',
+        focus: 'Arama ya da başka bir ses nedeniyle durduruldu.',
+        error: 'Ses motoru hata verdi.',
+        user: 'Durduruldu'
+      };
+      setRunning(false);
+      $('status').textContent = texts[d.reason] || 'Durduruldu';
+    });
+  }
+
+  // Uzun kullanım uyarısı
+  setInterval(() => {
+    if (running && !warnedLong && Date.now() - startedAt > LONG_MS) {
+      warnedLong = true;
+      $('status').textContent = '60 dakikadır çalışıyor. Kulaklığı çıkarıp kısa bir mola ver.';
+    }
+  }, 30000);
 
   $('batteryBtn').addEventListener('click', () => {
     const p = FG();
@@ -221,6 +353,7 @@
 
   load();
   updateLabels();
+  renderProfiles();
   attachListeners();
 </script>
 </body>
