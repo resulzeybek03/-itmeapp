@@ -98,17 +98,18 @@
       <input type="range" id="farSlider" min="0" max="1" step="0.1" value="0.5">
     </div>
 
-    <div class="section">Profillerim</div>
-    <div class="btn-row">
-      <input type="text" id="profileName" placeholder="Profil adı">
-      <button id="saveProfileBtn" class="btn-secondary">Kaydet</button>
+    <div class="section">Dinleme Kalitesi</div>
+    <div class="control">
+      <div class="label-row"><span>Ortam gürültüsü azaltma:</span><span id="nrVal" class="val-badge">50%</span></div>
+      <input type="range" id="nrSlider" min="0" max="100" step="5" value="50">
     </div>
-    <div id="profileList"></div>
-    <div class="btn-row">
-      <button id="exportBtn" class="btn-secondary">Dışa aktar</button>
-      <button id="importBtn" class="btn-secondary">İçe aktar</button>
+    <div class="control">
+      <div class="label-row"><span>Konuşma seçiciliği:</span><span id="vadVal" class="val-badge">50%</span></div>
+      <input type="range" id="vadSlider" min="0" max="100" step="5" value="50">
+      <div class="small">Yükseltirsen yalnızca belirgin konuşma geçer. Düşürürsen müzik ve sesler de geçer.</div>
     </div>
-    <textarea id="io" placeholder="Dışa aktarılan profiller burada görünür. İçe aktarmak için JSON'u buraya yapıştır."></textarea>
+    <label class="checkbox-row"><input type="checkbox" id="agcCheck" checked><span>Otomatik seviye dengeleme (uzak ve yakın sesi dengeler)</span></label>
+
 
     <div class="meter-container"><div id="meterBar" class="meter-bar"></div></div>
 
@@ -125,17 +126,16 @@
 <script>
   const $ = id => document.getElementById(id);
   const FG = () => window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.ForegroundAudio;
-  const SLIDERS = ['gateSlider', 'gainSlider', 'midSlider', 'trebleSlider', 'bassCutSlider', 'panSlider', 'farSlider'];
+  const SLIDERS = ['gateSlider', 'gainSlider', 'midSlider', 'trebleSlider', 'bassCutSlider', 'panSlider', 'farSlider', 'nrSlider', 'vadSlider'];
   const STORE = 'ses_yardimcisi_v11';
-  const PROFILE_KEY = 'ses_profiller_v11';
   const LONG_MS = 60 * 60 * 1000;
   let running = false, startedAt = 0, warnedLong = false, calibrating = null;
 
   const PRESETS = {
-    crystal: { gate: -44, gain: 3, mid: 8,  treble: 10, cut: 180, pan: 0, far: 0.5, muteFully: true },
-    crowd:   { gate: -38, gain: 3, mid: 12, treble: 8,  cut: 280, pan: 0, far: 0.4, muteFully: true },
-    natural: { gate: -50, gain: 3, mid: 3,  treble: 5,  cut: 100, pan: 0, far: 0.2, muteFully: false },
-    whisper: { gate: -54, gain: 5, mid: 10, treble: 12, cut: 200, pan: 0, far: 0.8, muteFully: true }
+    crystal: { gate: -44, gain: 3, mid: 8,  treble: 10, cut: 180, pan: 0, far: 0.5, muteFully: true,  nr: 50, vad: 50, agc: true },
+    crowd:   { gate: -38, gain: 3, mid: 12, treble: 8,  cut: 280, pan: 0, far: 0.4, muteFully: true,  nr: 80, vad: 70, agc: true },
+    natural: { gate: -50, gain: 3, mid: 3,  treble: 5,  cut: 100, pan: 0, far: 0.2, muteFully: false, nr: 30, vad: 30, agc: true },
+    whisper: { gate: -54, gain: 5, mid: 10, treble: 12, cut: 200, pan: 0, far: 0.8, muteFully: true,  nr: 60, vad: 60, agc: true }
   };
 
   function params() {
@@ -147,7 +147,10 @@
       treble: +$('trebleSlider').value,
       cut: +$('bassCutSlider').value,
       pan: +$('panSlider').value,
-      far: +$('farSlider').value
+      far: +$('farSlider').value,
+      nr: +$('nrSlider').value / 100,
+      vad: +$('vadSlider').value / 100,
+      agc: $('agcCheck').checked
     };
   }
 
@@ -160,6 +163,8 @@
     $('bassCutVal').textContent = (p.cut <= 110 ? 'Hafif' : p.cut <= 220 ? 'Orta' : 'Güçlü') + ' (' + p.cut + ' Hz)';
     $('panVal').textContent = p.pan === 0 ? 'Merkez' : (p.pan < 0 ? 'Sol %' : 'Sağ %') + Math.round(Math.abs(p.pan) * 100);
     $('farVal').textContent = Math.round(p.far * 100) + '%';
+    $('nrVal').textContent = Math.round(p.nr * 100) + '%';
+    $('vadVal').textContent = Math.round(p.vad * 100) + '%';
   }
 
   function save() {
@@ -182,6 +187,9 @@
     $('panSlider').value = p.pan !== undefined ? p.pan : 0;
     $('farSlider').value = p.far !== undefined ? p.far : 0.5;
     $('muteFully').checked = p.muteFully !== undefined ? p.muteFully : true;
+    $('nrSlider').value = p.nr !== undefined ? Math.round(p.nr * 100) : 50;
+    $('vadSlider').value = p.vad !== undefined ? Math.round(p.vad * 100) : 50;
+    $('agcCheck').checked = p.agc !== undefined ? p.agc : true;
     if (!silent) onChange(); else updateLabels();
   }
 
@@ -198,57 +206,8 @@
 
   SLIDERS.forEach(id => $(id).addEventListener('input', onChange));
   $('muteFully').addEventListener('change', onChange);
+  $('agcCheck').addEventListener('change', onChange);
   document.querySelectorAll('.preset-btn').forEach(b => b.addEventListener('click', () => applyPreset(b.dataset.preset)));
-
-  // ---- Profiller ----
-  function getProfiles() {
-    try { return JSON.parse(localStorage.getItem(PROFILE_KEY) || '{}'); } catch (e) { return {}; }
-  }
-  function setProfiles(o) {
-    try { localStorage.setItem(PROFILE_KEY, JSON.stringify(o)); } catch (e) {}
-    renderProfiles();
-  }
-  function renderProfiles() {
-    const o = getProfiles();
-    const names = Object.keys(o);
-    const list = $('profileList');
-    list.innerHTML = '';
-    if (!names.length) { list.innerHTML = '<div class="small">Henüz kayıtlı profil yok.</div>'; return; }
-    names.forEach(name => {
-      const row = document.createElement('div');
-      row.className = 'prow';
-      const load = document.createElement('button');
-      load.className = 'btn-small';
-      load.textContent = name;
-      load.onclick = () => applyValues(o[name]);
-      const del = document.createElement('button');
-      del.className = 'btn-small danger';
-      del.textContent = 'Sil';
-      del.onclick = () => { const x = getProfiles(); delete x[name]; setProfiles(x); };
-      row.appendChild(load);
-      row.appendChild(del);
-      list.appendChild(row);
-    });
-  }
-  $('saveProfileBtn').onclick = () => {
-    const name = $('profileName').value.trim();
-    if (!name) { $('status').textContent = 'Önce bir profil adı yaz.'; return; }
-    const o = getProfiles();
-    o[name] = params();
-    setProfiles(o);
-    $('profileName').value = '';
-    $('status').textContent = '"' + name + '" profili kaydedildi.';
-  };
-  $('exportBtn').onclick = () => { $('io').value = JSON.stringify(getProfiles(), null, 2); };
-  $('importBtn').onclick = () => {
-    try {
-      const incoming = JSON.parse($('io').value);
-      setProfiles(Object.assign(getProfiles(), incoming));
-      $('status').textContent = 'Profiller içe aktarıldı.';
-    } catch (e) {
-      $('status').textContent = 'JSON okunamadı.';
-    }
-  };
 
   // ---- Durum ----
   function setGate(open) {
@@ -353,7 +312,6 @@
 
   load();
   updateLabels();
-  renderProfiles();
   attachListeners();
 </script>
 </body>
