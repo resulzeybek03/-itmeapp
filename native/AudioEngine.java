@@ -54,6 +54,9 @@ public class AudioEngine {
   private volatile float cutHz = 180f;
   private volatile float pan = 0f;
   private volatile float far = 0.5f;
+  private volatile float nrAmt = 0.5f;     // Ortam gürültüsü azaltma (0-1)
+  private volatile float vadThr = 0.475f;  // Konuşma seçiciliği eşiği
+  private volatile boolean agcOn = true;   // Otomatik seviye dengeleme
 
   // DSP durumu (yalnızca ses thread'i kullanır)
   private float thOpen, thClose, floorG;
@@ -64,6 +67,15 @@ public class AudioEngine {
   private float oEnv = 0f, uGain = 1f, lEnv = 0f, lGain = 1f;
   private final Biquad hp = new Biquad(), mud = new Biquad(), mid = new Biquad(), treble = new Biquad();
   private final Biquad xLoLp = new Biquad(), xMidHp = new Biquad(), xMidLp = new Biquad(), xHiHp = new Biquad();
+  private final Biquad vHp = new Biquad(), vLp = new Biquad();   // konuşma bandı 300-3400 Hz
+  private float spEnv = 0f;
+  private final float[] nrEnv = new float[3], nrFloor = new float[3];
+  private final float[] nrG = {1f, 1f, 1f};
+  private float agcEnv = 0f, agcG = 1f;
+  private static final float AGC_TARGET = 0.06f;  // yaklaşık -24 dBFS
+  private final float nrAtt = coef(0.005f), nrRel = coef(0.08f);
+  private final float nrFloorUp = coef(3f), nrFloorDown = coef(0.1f);
+  private final float agcFast = coef(0.05f), agcSlow = coef(0.8f);
   private final float[] bEnv = new float[3];
   private final float[] bGain = {1f, 1f, 1f};
 
@@ -72,6 +84,8 @@ public class AudioEngine {
   private final float cAtt = coef(0.004f), cRel = coef(0.15f);
   private final float uAtt = coef(0.05f), uRel = coef(0.3f);
   private final float lAtt = coef(0.001f), lRel = coef(0.10f);
+
+  private static float clamp01(float v) { return Math.max(0f, Math.min(1f, v)); }
 
   private static float coef(float seconds) {
     return 1f - (float) Math.exp(-1.0 / (seconds * SR));
@@ -93,7 +107,10 @@ public class AudioEngine {
       if (o.has("treble")) trebleDb = (float) o.getDouble("treble");
       if (o.has("cut")) cutHz = (float) o.getDouble("cut");
       if (o.has("pan")) pan = (float) o.getDouble("pan");
-      if (o.has("far")) far = Math.max(0f, Math.min(1f, (float) o.getDouble("far")));
+      if (o.has("far")) far = clamp01((float) o.getDouble("far"));
+      if (o.has("nr")) nrAmt = clamp01((float) o.getDouble("nr"));
+      if (o.has("vad")) vadThr = 0.25f + 0.45f * clamp01((float) o.getDouble("vad"));
+      if (o.has("agc")) agcOn = o.getBoolean("agc");
       filtersDirty = true;
     } catch (Exception e) {
       emitError("Ayar okunamadı: " + e.getMessage());
@@ -177,6 +194,10 @@ public class AudioEngine {
 
     env = 0f; gateG = 0f; gateOpen = false; hold = 0;
     oEnv = 0f; uGain = 1f; lEnv = 0f; lGain = 1f;
+    spEnv = 0f; agcEnv = 0f; agcG = 1f;
+    java.util.Arrays.fill(nrEnv, 0f);
+    java.util.Arrays.fill(nrFloor, 0f);
+    java.util.Arrays.fill(nrG, 1f);
     java.util.Arrays.fill(bEnv, 0f);
     java.util.Arrays.fill(bGain, 1f);
     filtersDirty = true;
@@ -298,17 +319,23 @@ public class AudioEngine {
     xMidHp.highpass(500, 0.5);
     xMidLp.lowpass(3000, 0.5);
     xHiHp.highpass(3000, 0.5);
+    vHp.highpass(300, 0.707);
+    vLp.lowpass(3400, 0.707);
     thOpen = (float) Math.pow(10, gateDb / 20.0);
     thClose = (float) Math.pow(10, (gateDb - 10) / 20.0);
     floorG = muteFully ? 0f : 0.01f;
   }
 
   private float processSample(float x) {
-    // 1) Sessizlik kapısı
+    // 1) Sessizlik kapısı + konuşma algılama (VAD)
     float a = Math.abs(x);
     env += (a - env) * (a > env ? eAtt : eRel);
+    float sp = Math.abs(vLp.process(vHp.process(x)));
+    spEnv += (sp - spEnv) * (sp > spEnv ? eAtt : eRel);
+    float speechRatio = spEnv / (env + 1e-6f);
+    boolean speechy = speechRatio > vadThr;
     boolean was = gateOpen;
-    if (env > thOpen) {
+    if ((env > thOpen && speechy) || env > thOpen * 4f) {
       gateOpen = true; hold = holdN;
     } else if (gateOpen) {
       if (env >= thClose) hold = holdN;
@@ -329,6 +356,9 @@ public class AudioEngine {
     float lo = xLoLp.process(x);
     float md = xMidLp.process(xMidHp.process(x));
     float hi = xHiHp.process(x);
+    lo *= nrGain(0, lo);
+    md *= nrGain(1, md);
+    hi *= nrGain(2, hi);
     lo *= bandGain(0, lo);
     md *= bandGain(1, md);
     hi *= bandGain(2, hi);
@@ -344,10 +374,22 @@ public class AudioEngine {
     uGain += (uTarget - uGain) * (uTarget > uGain ? uAtt : uRel);
     x *= uGain;
 
-    // 5) Kazanç
+    // 5) Otomatik seviye dengeleme (konuşma varken girişi hedefe yaklaştırır)
+    if (agcOn) {
+      a = Math.abs(x);
+      agcEnv += (a - agcEnv) * (a > agcEnv ? agcFast : agcSlow);
+      float desired = 1f;
+      if (gateOpen && agcEnv > 1e-4f) {
+        desired = Math.max(0.25f, Math.min(4f, AGC_TARGET / agcEnv));
+      }
+      agcG += (desired - agcG) * (desired < agcG ? agcFast : agcSlow);
+      x *= agcG;
+    }
+
+    // 6) Kazanç
     x *= gain;
 
-    // 6) Sınırlayıcı
+    // 7) Sınırlayıcı
     a = Math.abs(x);
     lEnv += (a - lEnv) * (a > lEnv ? lAtt : lRel);
     float lvl2 = 20f * (float) Math.log10(lEnv + 1e-9f);
@@ -359,10 +401,28 @@ public class AudioEngine {
     lGain += (lTarget - lGain) * (lTarget < lGain ? lAtt : lRel);
     x *= lGain;
 
-    // 7) Son tavan
+    // 8) Son tavan
     if (x > MAX_OUT) x = MAX_OUT;
     else if (x < -MAX_OUT) x = -MAX_OUT;
     return x;
+  }
+
+  /**
+   * Bant başına gürültü azaltma: sessizken ortam gürültüsü tabanını öğrenir,
+   * tabana yakın sesleri (klima, uğultu, hışırtı) yumuşakça kısar. Konuşma dokunulmaz.
+   */
+  private float nrGain(int b, float s) {
+    float a = Math.abs(s);
+    nrEnv[b] += (a - nrEnv[b]) * (a > nrEnv[b] ? nrAtt : nrRel);
+    if (!gateOpen || nrEnv[b] < nrFloor[b]) {
+      nrFloor[b] += (nrEnv[b] - nrFloor[b]) * (nrEnv[b] > nrFloor[b] ? nrFloorUp : nrFloorDown);
+    }
+    float rel = 20f * (float) Math.log10((nrEnv[b] + 1e-9f) / (nrFloor[b] + 1e-9f));
+    float red = 0f;
+    if (rel < 6f && nrAmt > 0f) red = Math.min(12f * nrAmt, (6f - rel) * 2f);
+    float t = (float) Math.pow(10, -red / 20.0);
+    nrG[b] += (t - nrG[b]) * (t < nrG[b] ? nrAtt : nrRel);
+    return nrG[b];
   }
 
   /** Bant başına 3:1 sıkıştırma, eşik -32 dB */
