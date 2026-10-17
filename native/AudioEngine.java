@@ -28,7 +28,7 @@ public class AudioEngine {
   public static AudioEngine get() { return INSTANCE; }
 
   private static final int SR = 48000;
-  private static final int BLOCK = 256;
+  private static final int BLOCK = 128;
   private static final float LIMIT_DB = -6f;   // Güvenlik sınırı (dBFS)
   private static final float MAX_OUT = 0.5f;   // Son güvenlik tavanı
 
@@ -105,22 +105,44 @@ public class AudioEngine {
 
     AudioRecord rec;
     AudioTrack track;
+    int recBuf = Math.max(inMin, BLOCK * 4) * 2;
+    int trBuf = Math.max(outMin, BLOCK * 4 * 2 * 2);
+    AudioAttributes attrs = new AudioAttributes.Builder()
+        .setUsage(AudioAttributes.USAGE_MEDIA)
+        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+        .build();
+    AudioFormat inFmt = new AudioFormat.Builder()
+        .setSampleRate(SR)
+        .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
+        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+        .build();
+    AudioFormat outFmt = new AudioFormat.Builder()
+        .setSampleRate(SR)
+        .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
+        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+        .build();
     try {
-      rec = new AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, SR,
-          AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, Math.max(inMin, BLOCK * 8) * 2);
-      track = new AudioTrack(
-          new AudioAttributes.Builder()
-              .setUsage(AudioAttributes.USAGE_MEDIA)
-              .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-              .build(),
-          new AudioFormat.Builder()
-              .setSampleRate(SR)
-              .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-              .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
-              .build(),
-          Math.max(outMin, BLOCK * 8) * 2,
-          AudioTrack.MODE_STREAM,
-          AudioManager.AUDIO_SESSION_ID_GENERATE);
+      if (Build.VERSION.SDK_INT >= 26) {
+        // Düşük gecikme modu: küçük tamponlar, hızlı işleme
+        rec = new AudioRecord.Builder()
+            .setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
+            .setAudioFormat(inFmt)
+            .setBufferSizeInBytes(recBuf)
+            .setPerformanceMode(AudioRecord.PERFORMANCE_MODE_LOW_LATENCY)
+            .build();
+        track = new AudioTrack.Builder()
+            .setAudioAttributes(attrs)
+            .setAudioFormat(outFmt)
+            .setBufferSizeInBytes(trBuf)
+            .setTransferMode(AudioTrack.MODE_STREAM)
+            .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+            .build();
+      } else {
+        rec = new AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, SR,
+            AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, recBuf);
+        track = new AudioTrack(attrs, outFmt, trBuf, AudioTrack.MODE_STREAM,
+            AudioManager.AUDIO_SESSION_ID_GENERATE);
+      }
     } catch (Exception e) {
       emitError("Ses motoru oluşturulamadı: " + e.getMessage());
       return false;
